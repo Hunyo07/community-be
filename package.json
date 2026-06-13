@@ -1,0 +1,28 @@
+{
+  "name": "community-api",
+  "version": "1.0.0",
+  "description": "Express API for the CommUnity application.",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "dev": "nodemon src/server.js",
+    "start": "node src/server.js",
+    "seed:users": "node src/seeders/userSeeder.js",
+    "smoke:api": "node src/scripts/smokeApi.js",
+    "smoke:db": "node src/scripts/smokeDatabase.js",
+    "check": "node --check src/server.js && node --check src/app.js && node --check src/config/env.js && node --check src/config/db.js && node --check src/config/mailer.js && node --check src/controllers/authController.js && node --check src/controllers/dashboardController.js && node --check src/controllers/healthController.js && node --check src/controllers/moduleController.js && node --check src/controllers/postController.js && node --check src/controllers/residentController.js && node --check src/controllers/serviceController.js && node --check src/controllers/settingsController.js && node --check src/database/ensureSchema.js && node --check src/middleware/auth.js && node --check src/middleware/errorHandler.js && node --check src/middleware/upload.js && node --check src/rbac/roles.js && node --check src/realtime/socket.js && node --check src/routes/authRoutes.js && node --check src/routes/dashboardRoutes.js && node --check src/routes/healthRoutes.js && node --check src/routes/moduleRoutes.js && node --check src/routes/postRoutes.js && node --check src/routes/profileRoutes.js && node --check src/routes/residentRoutes.js && node --check src/routes/serviceRoutes.js && node --check src/routes/settingsRoutes.js && node --check src/seeders/userSeeder.js && node --check src/scripts/smokeApi.js && node --check src/scripts/smokeDatabase.js && node --check src/utils/auditLogger.js && node --check src/utils/password.js && node --check src/utils/settings.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
+    "multer": "^2.1.1",
+    "mysql2": "^3.15.3",
+    "nodemailer": "^8.0.10",
+    "socket.io": "^4.8.3"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.11"
+  }
+}
