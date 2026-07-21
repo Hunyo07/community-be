@@ -73,6 +73,44 @@ export const listPublicBarangays = async (req, res, next) => {
   }
 };
 
+export const getPublicStats = async (req, res, next) => {
+  try {
+    const [[residentCounts]] = await pool.query(
+      `SELECT
+        COUNT(*) AS totalResidents
+       FROM resident_accounts`
+    );
+    const [[barangayCounts]] = await pool.query(
+      `SELECT
+        COUNT(*) AS activeBarangays
+       FROM barangays
+       WHERE status = 'Active'`
+    );
+    const [[serviceCounts]] = await pool.query(
+      `SELECT
+        SUM(status = 'Active') AS activeServices
+       FROM services`
+    );
+    const [[beneficiaryCounts]] = await pool.query(
+      `SELECT
+        COUNT(*) AS beneficiariesServed
+       FROM service_beneficiaries
+       WHERE status = 'Served'`
+    );
+
+    return res.json({
+      data: {
+        registeredResidents: Number(residentCounts.totalResidents || 0),
+        barangaysCovered: Number(barangayCounts.activeBarangays || 0),
+        activeServices: Number(serviceCounts.activeServices || 0),
+        beneficiariesServed: Number(beneficiaryCounts.beneficiariesServed || 0)
+      }
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
 export const updateSetting = async (req, res, next) => {
   try {
     const { value } = req.body;
