@@ -7,6 +7,7 @@ import {
   updatePost
 } from '../controllers/postController.js';
 
+// These routes provide a simple CRUD API for sample community posts.
 const router = Router();
 
 router.get('/', getPosts);

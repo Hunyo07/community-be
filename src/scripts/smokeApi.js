@@ -1,9 +1,11 @@
+// Quick API smoke test: hits health, login, and key list endpoints for each role.
 import { env } from '../config/env.js';
 
 const apiBaseUrl = process.env.API_BASE_URL || `http://localhost:${env.port}/api`;
 const seededEmail = process.env.SMOKE_EMAIL || 'admin@community.test';
 const seededPassword = process.env.SMOKE_PASSWORD || 'Resident@123';
 
+// Call an API path and optionally assert the HTTP status code.
 const requestJson = async (path, options = {}, expectedStatus = null) => {
   const response = await fetch(`${apiBaseUrl}${path}`, {
     ...options,
@@ -29,12 +31,14 @@ const requestJson = async (path, options = {}, expectedStatus = null) => {
   return data;
 };
 
+// Ensures a list endpoint returned { data: [...] }.
 const assertArrayResponse = (label, response) => {
   if (!Array.isArray(response.data)) {
     throw new Error(`${label} did not return a data array`);
   }
 };
 
+// Log in and return Authorization headers for later requests.
 const loginAs = async (email, password = seededPassword) => {
   const loginResponse = await requestJson('/auth/login', {
     method: 'POST',
@@ -49,6 +53,7 @@ const loginAs = async (email, password = seededPassword) => {
   return { Authorization: `Bearer ${token}` };
 };
 
+// Run role-based checks for admin, staff, and resident accounts.
 const smokeApi = async () => {
   console.log(`API smoke target: ${apiBaseUrl}`);
 

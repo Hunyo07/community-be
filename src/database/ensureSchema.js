@@ -1,3 +1,7 @@
+// This file keeps the MySQL schema up to date when the server starts.
+// It creates missing tables, adds new columns safely, and seeds default reference data.
+
+// Returns true when a column already exists on a table in the current database.
 const columnExists = async (connection, tableName, columnName) => {
   const [rows] = await connection.execute(
     `SELECT COUNT(*) AS count
@@ -9,6 +13,8 @@ const columnExists = async (connection, tableName, columnName) => {
   );
   return Number(rows[0]?.count || 0) > 0;
 };
+
+// Adds a column only if it is missing, so restarts stay idempotent.
 const addColumnIfMissing = async (
   connection,
   tableName,
@@ -18,6 +24,8 @@ const addColumnIfMissing = async (
   if (await columnExists(connection, tableName, columnName)) return;
   await connection.query(`ALTER TABLE ${tableName} ADD COLUMN ${definition}`);
 };
+
+// Ensures OTP, resident, and staff account tables (and related migrations) exist.
 export const ensureResidentSchema = async (connection) => {
   await connection.query(`
     CREATE TABLE IF NOT EXISTS registration_otps (
@@ -153,6 +161,7 @@ export const ensureResidentSchema = async (connection) => {
       AND status IN ('Active', 'Verified', 'Inactive', 'Needs Correction', 'Rejected')
   `);
 };
+// Ensures service categories, services, and beneficiary tracking tables exist.
 export const ensureServiceSchema = async (connection) => {
   await connection.query(`
     CREATE TABLE IF NOT EXISTS service_categories (
@@ -284,6 +293,7 @@ export const ensureServiceSchema = async (connection) => {
     )
   `);
 };
+// Ensures barangays, offices, requests, announcements, notifications, and settings tables exist.
 export const ensurePhaseTwoSchema = async (connection) => {
   await connection.query(`
     CREATE TABLE IF NOT EXISTS barangays (
@@ -458,6 +468,7 @@ export const ensurePhaseTwoSchema = async (connection) => {
     )
   `);
 };
+// Inserts starter barangays, categories, offices, announcements, and settings when tables are empty.
 export const seedPhaseTwoDefaults = async (connection) => {
   await connection.query(`
     INSERT INTO barangays (name, district, captain, contact, status)
@@ -520,6 +531,7 @@ export const seedPhaseTwoDefaults = async (connection) => {
     WHERE NOT EXISTS (SELECT 1 FROM document_types)
   `);
 };
+// Entry point called at startup: runs all schema steps then seeds defaults.
 export const ensureCoreSchema = async (connection) => {
   await ensureResidentSchema(connection);
   await ensureServiceSchema(connection);

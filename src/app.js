@@ -1,3 +1,4 @@
+// Express app setup: CORS, JSON body parsing, route mounts, and error handlers.
 import cors from "cors";
 import express from "express";
 import { env } from "./config/env.js";
@@ -31,8 +32,11 @@ const app = express();
 app.use(cors({ origin: env.clientOrigins, credentials: true }));
 app.use(express.json());
 
+// Public auth endpoints (login, register, password reset).
 app.use("/api/auth", authRoutes);
+// Public settings that the landing page can read without login.
 app.use("/api/public/settings", publicSettingsRoutes);
+// Dashboard APIs require login + dashboard:read.
 app.use(
   "/api/dashboard",
   authenticate,
@@ -42,12 +46,14 @@ app.use(
 app.use("/api/profile", authenticate, profileRoutes);
 app.use("/api/health", healthRoutes);
 app.use("/api/posts", authenticate, postRoutes);
+// Resident APIs require login + residents:read.
 app.use(
   "/api/residents",
   authenticate,
   authorizePermissions(PERMISSIONS.RESIDENTS_READ),
   residentRoutes,
 );
+// Service APIs require login + services:read.
 app.use(
   "/api/services",
   authenticate,
@@ -115,6 +121,7 @@ app.use(
   settingsRoutes,
 );
 
+// Catch unknown routes, then format any thrown errors as JSON.
 app.use(notFoundHandler);
 app.use(errorHandler);
 

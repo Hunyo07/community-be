@@ -1,3 +1,4 @@
+// Server entry: connects MySQL, ensures schema, then starts HTTP + Socket.IO.
 import http from "node:http";
 import { Server } from "socket.io";
 import app from "./app.js";
@@ -14,8 +15,10 @@ const io = new Server(httpServer, {
   },
 });
 
+// Attach Socket.IO handlers so the frontend can receive live updates.
 initializeSocket(io);
 
+// Boot sequence: DB check → schema → listen on configured host/port.
 const startServer = async () => {
   try {
     await testConnection();

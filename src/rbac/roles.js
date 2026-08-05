@@ -1,9 +1,11 @@
+// Backend RBAC map: roles, permission codes, defaults, and permission helpers.
 export const ROLES = {
   ADMIN: 'admin',
   BARANGAY_STAFF: 'barangay_staff',
   RESIDENT: 'resident'
 };
 
+// Permission codes checked by middleware and controllers.
 export const PERMISSIONS = {
   DASHBOARD_READ: 'dashboard:read',
   PROFILE_READ: 'profile:read',
@@ -39,6 +41,7 @@ export const PERMISSIONS = {
   SETTINGS_MANAGE: 'settings:manage'
 };
 
+// Default permissions granted to each role.
 export const rolePermissions = {
   [ROLES.ADMIN]: Object.values(PERMISSIONS),
   [ROLES.BARANGAY_STAFF]: [
@@ -69,10 +72,13 @@ export const rolePermissions = {
   ]
 };
 
+// Returns the default permission list for a role name.
 export const getPermissionsForRole = (role) => rolePermissions[role] || [];
 
+// Returns every valid permission code in the system.
 export const getValidPermissions = () => Object.values(PERMISSIONS);
 
+// Cleans a stored permission list and applies role-specific rules (e.g. residents).
 export const normalizePermissions = (permissions, role) => {
   if (role === ROLES.RESIDENT) {
     return [...rolePermissions[ROLES.RESIDENT]];
@@ -99,6 +105,7 @@ export const normalizePermissions = (permissions, role) => {
   return Array.from(new Set(normalized));
 };
 
+// Checks whether a user object or role string includes a permission.
 export const hasPermission = (userOrRole, permission) => {
   if (typeof userOrRole === 'string') {
     return getPermissionsForRole(userOrRole).includes(permission);

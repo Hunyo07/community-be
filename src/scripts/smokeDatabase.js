@@ -1,3 +1,4 @@
+// Database smoke test: confirms required tables exist and basic counts are readable.
 import { pool, testConnection } from '../config/db.js';
 import { ensureCoreSchema } from '../database/ensureSchema.js';
 
@@ -16,6 +17,7 @@ const requiredTables = [
   'system_settings'
 ];
 
+// Connect, ensure schema, verify tables, then print a short status summary.
 const smokeDatabase = async () => {
   const connection = await pool.getConnection();
 

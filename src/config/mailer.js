@@ -1,6 +1,10 @@
 import nodemailer from 'nodemailer';
 import { env } from './env.js';
 
+// This file configures Gmail email sending for OTPs and account status notices.
+// Exported helpers check credentials and send the different message types the app needs.
+
+// Nodemailer transport that sends mail through Gmail using app credentials from env.
 export const mailer = nodemailer.createTransport({
   service: 'gmail',
   auth: {
@@ -12,6 +16,7 @@ export const mailer = nodemailer.createTransport({
   }
 });
 
+// Stops email sends early if Gmail credentials are missing from the environment.
 export const assertMailerConfigured = () => {
   if (!env.mail.user || !env.mail.appPassword) {
     throw Object.assign(
@@ -21,6 +26,7 @@ export const assertMailerConfigured = () => {
   }
 };
 
+// Sends the one-time password email used during resident registration.
 export const sendOtpEmail = async ({ to, otp }) => {
   assertMailerConfigured();
 
@@ -51,6 +57,7 @@ export const sendOtpEmail = async ({ to, otp }) => {
   }
 };
 
+// Sends the one-time password email used when a user resets their password.
 export const sendPasswordResetOtpEmail = async ({ to, otp }) => {
   assertMailerConfigured();
 
@@ -81,6 +88,7 @@ export const sendPasswordResetOtpEmail = async ({ to, otp }) => {
   }
 };
 
+// Emails a resident when staff approve, reject, or ask them to correct their account.
 export const sendAccountStatusEmail = async ({ to, name, status, reason = '' }) => {
   assertMailerConfigured();
 

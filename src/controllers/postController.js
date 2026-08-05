@@ -1,5 +1,9 @@
 import { pool } from '../config/db.js';
 
+// This controller provides basic CRUD operations for sample community posts.
+// It reads and writes the posts table and returns JSON for the frontend.
+
+// Lists all posts newest first.
 export const getPosts = async (req, res, next) => {
   try {
     const [posts] = await pool.query(
@@ -14,6 +18,7 @@ export const getPosts = async (req, res, next) => {
   }
 };
 
+// Returns one post by id, or 404 if it does not exist.
 export const getPostById = async (req, res, next) => {
   try {
     const [posts] = await pool.execute(
@@ -33,6 +38,7 @@ export const getPostById = async (req, res, next) => {
   }
 };
 
+// Creates a new post after checking that title and content were provided.
 export const createPost = async (req, res, next) => {
   try {
     const { title, content, author = 'Anonymous' } = req.body;
@@ -59,6 +65,7 @@ export const createPost = async (req, res, next) => {
   }
 };
 
+// Updates only the fields that were sent in the request body.
 export const updatePost = async (req, res, next) => {
   try {
     const { title, content, author } = req.body;
@@ -109,6 +116,7 @@ export const updatePost = async (req, res, next) => {
   }
 };
 
+// Deletes a post by id and returns 204 when successful.
 export const deletePost = async (req, res, next) => {
   try {
     const [result] = await pool.execute('DELETE FROM posts WHERE id = ?', [req.params.id]);

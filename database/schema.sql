@@ -1,3 +1,4 @@
+-- Baseline MySQL schema for CommUnity (tables for auth, residents, services, and more).
 CREATE DATABASE IF NOT EXISTS community_db;
 USE community_db;
 

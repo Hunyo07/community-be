@@ -1,3 +1,4 @@
+// Auth controller: login, session user, password reset/change, and resident registration with OTP.
 import crypto from 'node:crypto';
 import jwt from 'jsonwebtoken';
 import { env } from '../config/env.js';
@@ -9,8 +10,11 @@ import { logAudit } from '../utils/auditLogger.js';
 import { hashPassword, verifyPassword } from '../utils/password.js';
 import { isSettingEnabled } from '../utils/settings.js';
 
+// Create a 6-digit one-time password for email verification.
 const generateOtp = () => String(crypto.randomInt(100000, 999999));
+// Store OTPs as hashes so the plain code is not kept in the database.
 const hashOtp = (otp) => crypto.createHash('sha256').update(otp).digest('hex');
+// Compute age in years from a YYYY-MM-DD birth date.
 const calculateAge = (birthDate) => {
   const date = new Date(`${birthDate}T00:00:00`);
   if (Number.isNaN(date.getTime())) return null;
@@ -22,6 +26,7 @@ const calculateAge = (birthDate) => {
   return age;
 };
 
+// Throws a 400 error if any required body field is missing.
 const requireFields = (body, fields) => {
   const missing = fields.filter((field) => !body[field]);
 
@@ -30,12 +35,14 @@ const requireFields = (body, fields) => {
   }
 };
 
+// Normalize barangay names for comparison (trim, drop "Barangay" prefix, lowercase).
 const normalizeBarangayName = (barangay = '') =>
   String(barangay)
     .trim()
     .replace(/^barangay\s+/i, '')
     .toLowerCase();
 
+// Notify admins/staff who can review a newly submitted resident registration.
 const notifyResidentRegistrationReviewers = async ({ residentId, firstName, lastName, barangay }) => {
   const [staffRows] = await pool.execute(
     `SELECT id, role, barangay, permissions, status
@@ -81,6 +88,7 @@ const notifyResidentRegistrationReviewers = async ({ residentId, firstName, last
   });
 };
 
+// Build a signed JWT containing the user's identity and permissions.
 const createToken = (user) =>
   jwt.sign(
     {
@@ -97,6 +105,7 @@ const createToken = (user) =>
     { expiresIn: env.jwtExpiresIn }
   );
 
+// Look up a resident account by email for login/password flows.
 const getResidentUser = async (email) => {
   const [rows] = await pool.execute(
     `SELECT id, first_name, last_name, email, barangay, password_hash, role, verification_status, account_status, status
@@ -122,6 +131,7 @@ const getResidentUser = async (email) => {
   };
 };
 
+// Look up a staff account by email for login/password flows.
 const getStaffUser = async (email) => {
   const [rows] = await pool.execute(
     `SELECT id, name, email, barangay, office_id, password_hash, role, permissions, status
@@ -147,8 +157,10 @@ const getStaffUser = async (email) => {
   };
 };
 
+// Prefer staff match, otherwise try resident, for a given email.
 const getUserByEmail = async (email) => (await getStaffUser(email)) || (await getResidentUser(email));
 
+// Hash and save a new password on the correct account table.
 const updateUserPassword = async ({ accountType, id, password }) => {
   const passwordHash = hashPassword(password);
   const table = accountType === 'staff' ? 'staff_accounts' : 'resident_accounts';
@@ -156,6 +168,7 @@ const updateUserPassword = async ({ accountType, id, password }) => {
   return result.affectedRows > 0;
 };
 
+// Find an active/verified user who is allowed to reset their password.
 const findResettableUser = async (email) => {
   const staff = await getStaffUser(email);
   if (staff && staff.status === 'Active') return staff;
@@ -166,6 +179,7 @@ const findResettableUser = async (email) => {
   return null;
 };
 
+// Validate credentials, block inactive accounts, and return a JWT + user payload.
 export const login = async (req, res, next) => {
   try {
     const { email, password } = req.body;
@@ -235,6 +249,7 @@ export const login = async (req, res, next) => {
   }
 };
 
+// Return the authenticated user from the JWT (used by /auth/me).
 export const getCurrentUser = (req, res) => {
   res.json({
     data: {
@@ -252,6 +267,7 @@ export const getCurrentUser = (req, res) => {
   });
 };
 
+// Email a password-reset OTP if the account exists (always returns a generic message).
 export const requestPasswordResetOtp = async (req, res, next) => {
   try {
     const { email } = req.body;
@@ -293,6 +309,7 @@ export const requestPasswordResetOtp = async (req, res, next) => {
   }
 };
 
+// Verify the reset OTP and set a new password.
 export const resetPasswordWithOtp = async (req, res, next) => {
   try {
     const { email, otp, password } = req.body;
@@ -334,6 +351,7 @@ export const resetPasswordWithOtp = async (req, res, next) => {
   }
 };
 
+// Change password for the currently logged-in user (requires current password).
 export const changePassword = async (req, res, next) => {
   try {
     const { currentPassword, newPassword } = req.body;
@@ -362,6 +380,7 @@ export const changePassword = async (req, res, next) => {
   }
 };
 
+// Send a registration OTP to a new resident email (if registration is enabled).
 export const requestRegistrationOtp = async (req, res, next) => {
   try {
     const { email } = req.body;
@@ -401,6 +420,7 @@ export const requestRegistrationOtp = async (req, res, next) => {
   }
 };
 
+// Mark the registration OTP as verified so the account can be submitted next.
 export const verifyRegistrationOtp = async (req, res, next) => {
   try {
     const { email, otp } = req.body;
@@ -434,6 +454,7 @@ export const verifyRegistrationOtp = async (req, res, next) => {
   }
 };
 
+// Create a pending resident account after OTP verify + selfie-with-ID upload.
 export const registerResident = async (req, res, next) => {
   try {
     requireFields(req.body, ['firstName', 'lastName', 'email', 'barangay', 'birthDate', 'password', 'otp']);

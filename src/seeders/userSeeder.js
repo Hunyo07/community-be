@@ -1,3 +1,4 @@
+// Seeds sample resident and staff accounts for local development and smoke tests.
 import { pool } from '../config/db.js';
 import { ensureCoreSchema } from '../database/ensureSchema.js';
 import { normalizePermissions } from '../rbac/roles.js';
@@ -5,6 +6,7 @@ import { hashPassword } from '../utils/password.js';
 
 const defaultPassword = 'Resident@123';
 
+// Sample resident accounts with mixed verification/account statuses.
 const users = [
   {
     firstName: 'Maria',
@@ -96,6 +98,7 @@ const users = [
   }
 ];
 
+// Sample admin and barangay staff accounts used for testing roles.
 const staffUsers = [
   {
     name: 'CommUnity Admin',
@@ -130,6 +133,7 @@ const staffUsers = [
   }
 ];
 
+// Insert or update seed users, then print the shared default password.
 const seedUsers = async () => {
   const connection = await pool.getConnection();
 

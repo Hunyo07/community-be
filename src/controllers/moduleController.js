@@ -7,11 +7,16 @@ import { logAudit } from '../utils/auditLogger.js';
 import { hashPassword } from '../utils/password.js';
 import { isSettingEnabled } from '../utils/settings.js';
 
+// This controller powers shared “module” APIs: barangays, offices, requests, staff, and more.
+// Factory handlers (listModule, createModule, updateModule) reuse one tableMap config per resource.
+
+// Builds the user id/role pair used to decide which notifications belong to someone.
 const getNotificationAudience = (user) => ({
   userId: user?.id || 0,
   userRole: user?.role || user?.accountType || 'resident'
 });
 
+// SQL scope so users only see their own notifications (or broadcast ones for their role).
 const getNotificationScope = (user, tableAlias = '') => {
   const { userId, userRole } = getNotificationAudience(user);
   const prefix = tableAlias ? `${tableAlias}.` : '';
@@ -32,6 +37,7 @@ const normalizeBarangayName = (barangay = '') =>
 const barangayMatchSql = (columnName) => `LOWER(TRIM(REPLACE(REPLACE(${columnName}, 'Barangay ', ''), 'barangay ', ''))) =
   LOWER(TRIM(REPLACE(REPLACE(?, 'Barangay ', ''), 'barangay ', '')))`;
 
+// Loads the current user's barangay from resident or staff tables when needed.
 const getCurrentUserBarangay = async (user) => {
   if (!user?.id) return user?.barangay || null;
 
@@ -52,6 +58,7 @@ const announcementSelect = `SELECT id, title, content, poster_image AS posterIma
   published_at AS publishedAt, expires_at AS expiresAt, created_by AS createdBy, created_by_name AS createdByName, created_at AS createdAt
   FROM announcements`;
 
+// Fills announcement fields with defaults from the body, existing row, and signed-in user.
 const normalizeAnnouncementPayload = (body, user, existing = {}) => ({
   title: body.title ?? existing.title,
   content: body.content ?? existing.content ?? '',
@@ -67,6 +74,7 @@ const normalizeAnnouncementPayload = (body, user, existing = {}) => ({
   createdByName: existing.createdByName ?? user?.name ?? ''
 });
 
+// Creates in-app notifications for matching residents when an announcement is published.
 const createAnnouncementNotifications = async (announcement) => {
   if (announcement.status !== 'Published' || !['All', 'Residents'].includes(announcement.audience)) return;
 
@@ -99,6 +107,7 @@ const createAnnouncementNotifications = async (announcement) => {
   emitRealtimeEvent('notifications:changed', { action: 'created', userRole: 'resident' });
 };
 
+// Per-module SQL config: list/insert/update queries and realtime event names.
 const tableMap = {
   barangays: {
     table: 'barangays',
@@ -306,6 +315,7 @@ const tableMap = {
   }
 };
 
+// Factory: returns a handler that lists records for the named module.
 export const listModule = (moduleName) => async (req, res, next) => {
   try {
     const config = tableMap[moduleName];
@@ -317,6 +327,7 @@ export const listModule = (moduleName) => async (req, res, next) => {
   }
 };
 
+// Factory: returns a handler that inserts a new row for the named module.
 export const createModule = (moduleName) => async (req, res, next) => {
   try {
     const config = tableMap[moduleName];
@@ -381,6 +392,7 @@ export const createModule = (moduleName) => async (req, res, next) => {
   }
 };
 
+// Factory: returns a handler that updates an existing row for the named module.
 export const updateModule = (moduleName) => async (req, res, next) => {
   try {
     const config = tableMap[moduleName];
@@ -415,6 +427,7 @@ export const updateModule = (moduleName) => async (req, res, next) => {
   }
 };
 
+// Moves a document request through its status workflow and notifies the resident.
 export const updateRequestStatus = async (req, res, next) => {
   try {
     const { status } = req.body;
@@ -494,6 +507,7 @@ export const updateRequestStatus = async (req, res, next) => {
   }
 };
 
+// Lets residents or staff edit request title/description while still submitted.
 export const updateRequestDetails = async (req, res, next) => {
   try {
     const { title, description = '' } = req.body;
@@ -545,6 +559,7 @@ export const updateRequestDetails = async (req, res, next) => {
   }
 };
 
+// Marks a single notification as read for the signed-in user.
 export const markNotificationRead = async (req, res, next) => {
   try {
     const scope = getNotificationScope(req.user);
@@ -574,6 +589,7 @@ export const markNotificationRead = async (req, res, next) => {
   }
 };
 
+// Returns total and unread notification counts for the signed-in user.
 export const getNotificationSummary = async (req, res, next) => {
   try {
     const scope = getNotificationScope(req.user);
@@ -598,6 +614,7 @@ export const getNotificationSummary = async (req, res, next) => {
   }
 };
 
+// Marks every unread notification in the user's scope as read.
 export const markAllNotificationsRead = async (req, res, next) => {
   try {
     const scope = getNotificationScope(req.user);
@@ -623,6 +640,7 @@ export const markAllNotificationsRead = async (req, res, next) => {
   }
 };
 
+// Deletes an announcement by id and notifies connected clients.
 export const deleteAnnouncement = async (req, res, next) => {
   try {
     const [result] = await pool.execute('DELETE FROM announcements WHERE id = ?', [req.params.id]);
@@ -643,6 +661,7 @@ export const deleteAnnouncement = async (req, res, next) => {
   }
 };
 
+// Streams an announcement poster image after checking audience and barangay access.
 export const getAnnouncementPoster = async (req, res, next) => {
   try {
     const [rows] = await pool.execute(
@@ -682,6 +701,7 @@ export const getAnnouncementPoster = async (req, res, next) => {
   }
 };
 
+// Lists staff accounts with normalized permissions for the admin UI.
 export const listStaff = async (req, res, next) => {
   try {
     const [rows] = await pool.query(
@@ -702,6 +722,7 @@ export const listStaff = async (req, res, next) => {
   }
 };
 
+// Creates a staff account (or upserts by email) with hashed password and permissions.
 export const createStaff = async (req, res, next) => {
   try {
     const { name, email, barangay = null, officeId = null, role = 'barangay_staff', password = 'Staff@123', status = 'Active' } = req.body;
@@ -728,6 +749,7 @@ export const createStaff = async (req, res, next) => {
   }
 };
 
+// Updates staff profile, role, permissions, and optional password.
 export const updateStaff = async (req, res, next) => {
   try {
     const { name, email, barangay = null, officeId = null, role = 'barangay_staff', password = '', status = 'Active' } = req.body;

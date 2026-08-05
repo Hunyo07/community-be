@@ -1,7 +1,9 @@
+// Auth middleware: verifies JWT tokens and checks roles/permissions on protected routes.
 import jwt from 'jsonwebtoken';
 import { env } from '../config/env.js';
 import { normalizePermissions, hasPermission } from '../rbac/roles.js';
 
+// Require a valid Bearer token and attach the decoded user to req.user.
 export const authenticate = (req, res, next) => {
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : '';
@@ -22,6 +24,7 @@ export const authenticate = (req, res, next) => {
   }
 };
 
+// Allow only users whose role is in the given list.
 export const authorizeRoles = (...roles) => (req, res, next) => {
   if (!req.user || !roles.includes(req.user.role)) {
     return res.status(403).json({ message: 'You do not have access to this resource' });
@@ -30,6 +33,7 @@ export const authorizeRoles = (...roles) => (req, res, next) => {
   return next();
 };
 
+// Allow only users who have every listed permission.
 export const authorizePermissions = (...permissions) => (req, res, next) => {
   const allowed = permissions.every((permission) => hasPermission(req.user, permission));
 

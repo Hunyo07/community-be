@@ -2,6 +2,9 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
+// This file loads environment variables and exposes them as a single config object.
+// Helpers below turn strings from .env into numbers and origin lists the app can use.
+
 const toNumber = (value, fallback) => {
   const parsed = Number.parseInt(value, 10);
   return Number.isNaN(parsed) ? fallback : parsed;
@@ -22,6 +25,7 @@ const parseClientOrigins = (value) => {
     .filter(Boolean);
 };
 
+// Shared app settings (host, JWT, database, mail) read from process.env with safe defaults.
 export const env = {
   host: process.env.HOST || "0.0.0.0",
   port: toNumber(process.env.PORT, 5000),
