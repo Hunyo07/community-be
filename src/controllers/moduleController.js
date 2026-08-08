@@ -112,14 +112,14 @@ const tableMap = {
   barangays: {
     table: 'barangays',
     realtime: 'barangays:changed',
-    list: `SELECT id, name, district, captain, contact, status, created_at AS createdAt FROM barangays ORDER BY name ASC`,
+    list: `SELECT id, name, captain, contact, status, created_at AS createdAt FROM barangays ORDER BY name ASC`,
     insert: {
-      sql: `INSERT INTO barangays (name, district, captain, contact, status) VALUES (?, ?, ?, ?, ?)`,
-      values: (body) => [body.name, body.district || '', body.captain || '', body.contact || '', body.status || 'Active']
+      sql: `INSERT INTO barangays (name, captain, contact, status) VALUES (?, ?, ?, ?)`,
+      values: (body) => [body.name, body.captain || '', body.contact || '', body.status || 'Active']
     },
     update: {
-      sql: `UPDATE barangays SET name = ?, district = ?, captain = ?, contact = ?, status = ? WHERE id = ?`,
-      values: (body, id) => [body.name, body.district || '', body.captain || '', body.contact || '', body.status || 'Active', id]
+      sql: `UPDATE barangays SET name = ?, captain = ?, contact = ?, status = ? WHERE id = ?`,
+      values: (body, id) => [body.name, body.captain || '', body.contact || '', body.status || 'Active', id]
     }
   },
   offices: {

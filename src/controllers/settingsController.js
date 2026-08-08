@@ -72,7 +72,7 @@ export const getPublicSettings = async (req, res, next) => {
 export const listPublicBarangays = async (req, res, next) => {
   try {
     const [rows] = await pool.query(
-      `SELECT id, name, district, status
+      `SELECT id, name, status
        FROM barangays
        WHERE status = 'Active'
        ORDER BY name ASC`,

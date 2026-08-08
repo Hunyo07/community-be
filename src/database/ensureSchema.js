@@ -1,6 +1,8 @@
 // This file keeps the MySQL schema up to date when the server starts.
 // It creates missing tables, adds new columns safely, and seeds default reference data.
 
+import { TARLAC_CITY_BARANGAYS } from '../seeders/tarlacCityBarangays.js';
+
 // Returns true when a column already exists on a table in the current database.
 const columnExists = async (connection, tableName, columnName) => {
   const [rows] = await connection.execute(
@@ -23,6 +25,12 @@ const addColumnIfMissing = async (
 ) => {
   if (await columnExists(connection, tableName, columnName)) return;
   await connection.query(`ALTER TABLE ${tableName} ADD COLUMN ${definition}`);
+};
+
+// Drops a column only if it exists, so restarts stay idempotent.
+const dropColumnIfExists = async (connection, tableName, columnName) => {
+  if (!(await columnExists(connection, tableName, columnName))) return;
+  await connection.query(`ALTER TABLE ${tableName} DROP COLUMN ${columnName}`);
 };
 
 // Ensures OTP, resident, and staff account tables (and related migrations) exist.
@@ -299,7 +307,6 @@ export const ensurePhaseTwoSchema = async (connection) => {
     CREATE TABLE IF NOT EXISTS barangays (
       id INT UNSIGNED NOT NULL AUTO_INCREMENT,
       name VARCHAR(120) NOT NULL,
-      district VARCHAR(120) NOT NULL DEFAULT '',
       captain VARCHAR(160) NOT NULL DEFAULT '',
       contact VARCHAR(80) NOT NULL DEFAULT '',
       status ENUM('Active', 'Inactive') NOT NULL DEFAULT 'Active',
@@ -309,6 +316,7 @@ export const ensurePhaseTwoSchema = async (connection) => {
       UNIQUE KEY unique_barangay_name (name)
     )
   `);
+  await dropColumnIfExists(connection, 'barangays', 'district');
   await connection.query(`
     CREATE TABLE IF NOT EXISTS offices (
       id INT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -470,17 +478,16 @@ export const ensurePhaseTwoSchema = async (connection) => {
 };
 // Inserts starter barangays, categories, offices, announcements, and settings when tables are empty.
 export const seedPhaseTwoDefaults = async (connection) => {
-  await connection.query(`
-    INSERT INTO barangays (name, district, captain, contact, status)
-    SELECT * FROM (
-      SELECT 'San Isidro', 'North District', 'Elena Ramos', '0917-100-0001', 'Active'
-      UNION ALL SELECT 'Mabini', 'East District', 'Roberto Cruz', '0917-100-0002', 'Active'
-      UNION ALL SELECT 'Poblacion', 'Central District', 'Ana Villamor', '0917-100-0003', 'Active'
-      UNION ALL SELECT 'Bagong Silang', 'South District', 'Marco Reyes', '0917-100-0004', 'Active'
-      UNION ALL SELECT 'Maligaya', 'West District', 'Teresa Lim', '0917-100-0005', 'Active'
-    ) AS seed_barangays
-    WHERE NOT EXISTS (SELECT 1 FROM barangays)
-  `);
+  const [[barangayCount]] = await connection.query('SELECT COUNT(*) AS total FROM barangays');
+  if (Number(barangayCount.total || 0) === 0) {
+    for (const name of TARLAC_CITY_BARANGAYS) {
+      await connection.execute(
+        `INSERT INTO barangays (name, captain, contact, status)
+         VALUES (?, '', '', 'Active')`,
+        [name],
+      );
+    }
+  }
   await connection.query(`
     INSERT INTO service_categories (name, description, status)
     SELECT * FROM (
