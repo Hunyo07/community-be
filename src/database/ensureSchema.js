@@ -65,6 +65,7 @@ export const ensureResidentSchema = async (connection) => {
     CREATE TABLE IF NOT EXISTS resident_accounts (
       id INT UNSIGNED NOT NULL AUTO_INCREMENT,
       first_name VARCHAR(100) NOT NULL,
+      middle_name VARCHAR(100) NULL,
       last_name VARCHAR(100) NOT NULL,
       email VARCHAR(180) NOT NULL,
       barangay VARCHAR(120) NOT NULL,
@@ -272,6 +273,12 @@ export const ensureServiceSchema = async (connection) => {
     UPDATE services
     SET target_beneficiaries = GREATEST(target_beneficiaries, beneficiaries)
   `);
+  await addColumnIfMissing(
+    connection,
+    "resident_accounts",
+    "middle_name",
+    "middle_name VARCHAR(100) NULL AFTER first_name",
+  );
   await addColumnIfMissing(
     connection,
     "resident_accounts",

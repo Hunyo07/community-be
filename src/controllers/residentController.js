@@ -7,6 +7,10 @@ import { emitRealtimeEvent } from "../realtime/socket.js";
 import { PERMISSIONS } from "../rbac/roles.js";
 import { logAudit } from "../utils/auditLogger.js";
 import { hashPassword } from "../utils/password.js";
+import {
+  formatResidentName,
+  normalizeMiddleName,
+} from "../utils/residentName.js";
 
 // This controller manages resident account operations on the backend.
 // It validates input, stores resident data, and sends real-time updates after changes.
@@ -34,8 +38,13 @@ const calculateAge = (birthDate) => {
 const mapResident = (resident) => ({
   id: `RES-${String(resident.id).padStart(4, "0")}`,
   rawId: resident.id,
-  name: `${resident.first_name} ${resident.last_name}`,
+  name: formatResidentName(
+    resident.first_name,
+    resident.middle_name,
+    resident.last_name,
+  ),
   firstName: resident.first_name,
+  middleName: resident.middle_name || "",
   lastName: resident.last_name,
   email: resident.email,
   contact: resident.contact_number || resident.email,
@@ -85,7 +94,7 @@ const getResidentScope = (user, tableAlias = "") => {
 // Loads one resident by id and maps it for API responses.
 const getResidentById = async (id) => {
   const [rows] = await pool.execute(
-    `SELECT id, first_name, last_name, email, contact_number, barangay, purok_sitio, birth_date, age, gender, selfie_id_image, role, verification_status, account_status, status, created_at
+    `SELECT id, first_name, middle_name, last_name, email, contact_number, barangay, purok_sitio, birth_date, age, gender, selfie_id_image, role, verification_status, account_status, status, created_at
      FROM resident_accounts
      WHERE id = ?`,
     [id],
@@ -108,6 +117,9 @@ const applyResidentWriteScope = (payload, user) => {
 const normalizeResidentPayload = (body, existing = {}) => {
   const payload = {
     firstName: body.firstName ?? existing.firstName,
+    middleName: normalizeMiddleName(
+      body.middleName !== undefined ? body.middleName : existing.middleName,
+    ),
     lastName: body.lastName ?? existing.lastName,
     email: body.email ?? existing.email,
     barangay: body.barangay ?? existing.barangay,
@@ -195,7 +207,7 @@ export const getResidents = async (req, res, next) => {
     const scope = getResidentScope(req.user);
     const where = scope.clause ? `WHERE ${scope.clause}` : "";
     const [residents] = await pool.execute(
-      `SELECT id, first_name, last_name, email, contact_number, barangay, purok_sitio, birth_date, age, gender, selfie_id_image, role, verification_status, account_status, status, created_at
+      `SELECT id, first_name, middle_name, last_name, email, contact_number, barangay, purok_sitio, birth_date, age, gender, selfie_id_image, role, verification_status, account_status, status, created_at
        FROM resident_accounts
        ${where}
        ORDER BY created_at DESC`,
@@ -218,10 +230,11 @@ export const createResident = async (req, res, next) => {
 
     const [result] = await pool.execute(
       `INSERT INTO resident_accounts
-        (first_name, last_name, email, contact_number, barangay, purok_sitio, birth_date, age, gender, password_hash, selfie_id_image, verification_status, account_status, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (first_name, middle_name, last_name, email, contact_number, barangay, purok_sitio, birth_date, age, gender, password_hash, selfie_id_image, verification_status, account_status, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         payload.firstName,
+        payload.middleName,
         payload.lastName,
         payload.email,
         payload.contactNumber,
@@ -289,6 +302,7 @@ export const updateResident = async (req, res, next) => {
     );
     const values = [
       payload.firstName,
+      payload.middleName,
       payload.lastName,
       payload.email,
       payload.contactNumber,
@@ -320,7 +334,7 @@ export const updateResident = async (req, res, next) => {
 
     await pool.execute(
       `UPDATE resident_accounts
-       SET first_name = ?, last_name = ?, email = ?, contact_number = ?, barangay = ?, purok_sitio = ?, birth_date = ?, age = ?, gender = ?, verification_status = ?, account_status = ?, status = ?${passwordSql}${selfieSql}
+       SET first_name = ?, middle_name = ?, last_name = ?, email = ?, contact_number = ?, barangay = ?, purok_sitio = ?, birth_date = ?, age = ?, gender = ?, verification_status = ?, account_status = ?, status = ?${passwordSql}${selfieSql}
        WHERE id = ?`,
       values,
     );
@@ -398,10 +412,11 @@ export const updateMyResidentProfile = async (req, res, next) => {
 
     await pool.execute(
       `UPDATE resident_accounts
-       SET first_name = ?, last_name = ?, contact_number = ?, purok_sitio = ?, birth_date = ?, age = ?, gender = ?
+       SET first_name = ?, middle_name = ?, last_name = ?, contact_number = ?, purok_sitio = ?, birth_date = ?, age = ?, gender = ?
        WHERE id = ?`,
       [
         payload.firstName,
+        payload.middleName,
         payload.lastName,
         payload.contactNumber,
         payload.purokSitio,
@@ -421,6 +436,7 @@ export const updateMyResidentProfile = async (req, res, next) => {
       entityId: req.user.id,
       details: {
         firstName: payload.firstName,
+        middleName: payload.middleName,
         lastName: payload.lastName,
         contactNumber: payload.contactNumber,
         purokSitio: payload.purokSitio,

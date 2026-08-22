@@ -183,7 +183,7 @@ const tableMap = {
       return {
         sql: `SELECT sr.id, sr.resident_id AS residentId, sr.document_type_id AS documentTypeId,
                 sr.title, sr.description, sr.status, sr.created_at AS createdAt,
-                CONCAT(ra.first_name, ' ', ra.last_name) AS residentName, ra.barangay AS residentBarangay,
+                TRIM(CONCAT_WS(' ', ra.first_name, NULLIF(TRIM(ra.middle_name), ''), ra.last_name)) AS residentName, ra.barangay AS residentBarangay,
                 dt.name AS documentTypeName
               FROM service_requests sr
               LEFT JOIN resident_accounts ra ON ra.id = sr.resident_id

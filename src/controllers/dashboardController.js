@@ -1,5 +1,6 @@
 import { pool } from "../config/db.js";
 import { PERMISSIONS, ROLES } from "../rbac/roles.js";
+import { formatResidentName } from "../utils/residentName.js";
 
 // This controller builds the data shown on the dashboard.
 // It gathers resident, request, and service statistics from the database.
@@ -172,7 +173,7 @@ export const getDashboard = async (req, res, next) => {
        FROM services`,
     );
     const [recentResidents] = await pool.execute(
-      `SELECT first_name, last_name, barangay, status, created_at
+      `SELECT first_name, middle_name, last_name, barangay, status, created_at
        FROM resident_accounts
        ${residentWhere}
        ORDER BY created_at DESC
@@ -180,7 +181,7 @@ export const getDashboard = async (req, res, next) => {
       residentValues,
     );
     const [pendingResidents] = await pool.execute(
-      `SELECT first_name, last_name, barangay, status, created_at
+      `SELECT first_name, middle_name, last_name, barangay, status, created_at
        FROM resident_accounts
        WHERE verification_status = 'Pending'${scopedToBarangay ? " AND barangay = ?" : ""}
        ORDER BY created_at DESC
@@ -198,7 +199,7 @@ export const getDashboard = async (req, res, next) => {
       residentValues,
     );
     const [pendingServiceRequests] = await pool.execute(
-      `SELECT sr.title, sr.status, sr.created_at, CONCAT(ra.first_name, ' ', ra.last_name) AS residentName,
+      `SELECT sr.title, sr.status, sr.created_at, TRIM(CONCAT_WS(' ', ra.first_name, NULLIF(TRIM(ra.middle_name), ''), ra.last_name)) AS residentName,
         ra.barangay, dt.name AS documentTypeName
        FROM service_requests sr
        LEFT JOIN resident_accounts ra ON ra.id = sr.resident_id
@@ -290,7 +291,7 @@ export const getDashboard = async (req, res, next) => {
 
     const recentActivity = recentResidents.map((resident) => ({
       title: "Resident registration updated",
-      description: `${resident.first_name} ${resident.last_name} - ${resident.barangay}`,
+      description: `${formatResidentName(resident.first_name, resident.middle_name, resident.last_name)} - ${resident.barangay}`,
       time: new Date(resident.created_at).toLocaleDateString(),
     }));
 
@@ -301,7 +302,7 @@ export const getDashboard = async (req, res, next) => {
         status: request.status,
       })),
       ...pendingResidents.map((resident) => ({
-        title: `${resident.first_name} ${resident.last_name} identity review`,
+        title: `${formatResidentName(resident.first_name, resident.middle_name, resident.last_name)} identity review`,
         meta: `${resident.barangay} - pending resident verification`,
         status: resident.status,
       })),

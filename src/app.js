@@ -6,6 +6,7 @@ import { authenticate, authorizePermissions } from "./middleware/auth.js";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
 import authRoutes from "./routes/authRoutes.js";
 import dashboardRoutes from "./routes/dashboardRoutes.js";
+import reportRoutes from "./routes/reportRoutes.js";
 import healthRoutes from "./routes/healthRoutes.js";
 import postRoutes from "./routes/postRoutes.js";
 import profileRoutes from "./routes/profileRoutes.js";
@@ -42,6 +43,12 @@ app.use(
   authenticate,
   authorizePermissions(PERMISSIONS.DASHBOARD_READ),
   dashboardRoutes,
+);
+app.use(
+  "/api/reports",
+  authenticate,
+  authorizePermissions(PERMISSIONS.REPORTS_READ),
+  reportRoutes,
 );
 app.use("/api/profile", authenticate, profileRoutes);
 app.use("/api/health", healthRoutes);

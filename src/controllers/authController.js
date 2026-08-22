@@ -9,6 +9,10 @@ import { normalizePermissions, PERMISSIONS, ROLES } from '../rbac/roles.js';
 import { logAudit } from '../utils/auditLogger.js';
 import { hashPassword, verifyPassword } from '../utils/password.js';
 import { isSettingEnabled } from '../utils/settings.js';
+import {
+  formatResidentName,
+  normalizeMiddleName,
+} from '../utils/residentName.js';
 
 // Create a 6-digit one-time password for email verification.
 const generateOtp = () => String(crypto.randomInt(100000, 999999));
@@ -43,7 +47,7 @@ const normalizeBarangayName = (barangay = '') =>
     .toLowerCase();
 
 // Notify admins/staff who can review a newly submitted resident registration.
-const notifyResidentRegistrationReviewers = async ({ residentId, firstName, lastName, barangay }) => {
+const notifyResidentRegistrationReviewers = async ({ residentId, firstName, middleName, lastName, barangay }) => {
   const [staffRows] = await pool.execute(
     `SELECT id, role, barangay, permissions, status
      FROM staff_accounts
@@ -67,7 +71,7 @@ const notifyResidentRegistrationReviewers = async ({ residentId, firstName, last
 
   if (!reviewers.length) return;
 
-  const residentName = `${firstName} ${lastName}`.trim();
+  const residentName = formatResidentName(firstName, middleName, lastName);
   await pool.query(
     `INSERT INTO notifications (user_id, user_role, title, message)
      VALUES ?`,
@@ -108,7 +112,7 @@ const createToken = (user) =>
 // Look up a resident account by email for login/password flows.
 const getResidentUser = async (email) => {
   const [rows] = await pool.execute(
-    `SELECT id, first_name, last_name, email, barangay, password_hash, role, verification_status, account_status, status
+    `SELECT id, first_name, middle_name, last_name, email, barangay, password_hash, role, verification_status, account_status, status
      FROM resident_accounts
      WHERE email = ?`,
     [email]
@@ -119,7 +123,7 @@ const getResidentUser = async (email) => {
   const resident = rows[0];
   return {
     id: resident.id,
-    name: `${resident.first_name} ${resident.last_name}`,
+    name: formatResidentName(resident.first_name, resident.middle_name, resident.last_name),
     email: resident.email,
     barangay: resident.barangay,
     passwordHash: resident.password_hash,
@@ -468,6 +472,7 @@ export const registerResident = async (req, res, next) => {
     }
 
     const { firstName, lastName, email, barangay, birthDate, password, otp } = req.body;
+    const middleName = normalizeMiddleName(req.body.middleName);
     const age = calculateAge(birthDate);
 
     if (age === null || age < 13 || age > 120) {
@@ -492,9 +497,9 @@ export const registerResident = async (req, res, next) => {
 
     const [result] = await pool.execute(
       `INSERT INTO resident_accounts
-        (first_name, last_name, email, barangay, birth_date, age, password_hash, selfie_id_image, verification_status, account_status, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending', 'Inactive', 'Pending')`,
-      [firstName, lastName, email, barangay, birthDate, age, passwordHash, req.file.path]
+        (first_name, middle_name, last_name, email, barangay, birth_date, age, password_hash, selfie_id_image, verification_status, account_status, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', 'Inactive', 'Pending')`,
+      [firstName, middleName, lastName, email, barangay, birthDate, age, passwordHash, req.file.path]
     );
 
     await pool.execute('DELETE FROM registration_otps WHERE email = ?', [email]);
@@ -511,6 +516,7 @@ export const registerResident = async (req, res, next) => {
       data: {
         id: result.insertId,
         firstName,
+        middleName,
         lastName,
         email,
         barangay,
@@ -525,6 +531,7 @@ export const registerResident = async (req, res, next) => {
     await notifyResidentRegistrationReviewers({
       residentId: result.insertId,
       firstName,
+      middleName,
       lastName,
       barangay
     });
@@ -535,6 +542,7 @@ export const registerResident = async (req, res, next) => {
       data: {
         id: result.insertId,
         firstName,
+        middleName,
         lastName,
         email,
         barangay,

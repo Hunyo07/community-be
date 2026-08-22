@@ -2,6 +2,7 @@ import { pool } from "../config/db.js";
 import { emitRealtimeEvent } from "../realtime/socket.js";
 import { logAudit } from "../utils/auditLogger.js";
 import { getSettingValue } from "../utils/settings.js";
+import { formatResidentName } from "../utils/residentName.js";
 
 // This controller handles service management on the backend.
 // It validates requests, enforces access rules, and returns service data for the frontend.
@@ -619,7 +620,7 @@ const getServiceForAction = async (req, id) => {
 const mapChecklistResident = (row) => ({
   residentId: row.resident_id,
   residentCode: `RES-${String(row.resident_id).padStart(4, "0")}`,
-  name: `${row.first_name} ${row.last_name}`,
+  name: formatResidentName(row.first_name, row.middle_name, row.last_name),
   barangay: row.barangay,
   age: row.age || null,
   gender: row.gender || "Unspecified",
@@ -638,9 +639,10 @@ const getServiceChecklistRows = async (service, filters = {}) => {
 
   if (filters.search) {
     where.push(
-      `(ra.first_name LIKE ? OR ra.last_name LIKE ? OR ra.email LIKE ?)`,
+      `(ra.first_name LIKE ? OR ra.middle_name LIKE ? OR ra.last_name LIKE ? OR ra.email LIKE ?)`,
     );
     values.push(
+      `%${filters.search}%`,
       `%${filters.search}%`,
       `%${filters.search}%`,
       `%${filters.search}%`,
@@ -658,7 +660,7 @@ const getServiceChecklistRows = async (service, filters = {}) => {
   }
 
   const [rows] = await pool.execute(
-    `SELECT ra.id AS resident_id, ra.first_name, ra.last_name, ra.email, ra.contact_number, ra.barangay,
+    `SELECT ra.id AS resident_id, ra.first_name, ra.middle_name, ra.last_name, ra.email, ra.contact_number, ra.barangay,
             ra.age, ra.gender, ra.purok_sitio, sb.status AS beneficiary_status,
             sb.served_at, sb.processed_by_name, sb.remarks
      FROM resident_accounts ra

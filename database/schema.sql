@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS registration_otps (
 CREATE TABLE IF NOT EXISTS resident_accounts (
   id INT UNSIGNED NOT NULL AUTO_INCREMENT,
   first_name VARCHAR(100) NOT NULL,
+  middle_name VARCHAR(100) NULL,
   last_name VARCHAR(100) NOT NULL,
   email VARCHAR(180) NOT NULL,
   barangay VARCHAR(120) NOT NULL,
