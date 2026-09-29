@@ -28,6 +28,17 @@ const getNotificationScope = (user, tableAlias = '') => {
   };
 };
 
+const OTHERS_DOCUMENT_TYPE = 'Others';
+
+// Residents must name the document when they choose the Others type.
+const otherDocumentTitle = (title) => {
+  const specification = String(title || '').trim();
+  if (!specification || specification.toLowerCase() === OTHERS_DOCUMENT_TYPE.toLowerCase()) {
+    return '';
+  }
+  return specification;
+};
+
 const normalizeBarangayName = (barangay = '') =>
   String(barangay)
     .trim()
@@ -348,8 +359,17 @@ export const createModule = (moduleName) => async (req, res, next) => {
 
       req.body.documentTypeId = documentTypeId;
       req.body.serviceId = null;
-      req.body.title = documentTypes[0].name;
       req.body.status = 'Submitted';
+
+      if (documentTypes[0].name === OTHERS_DOCUMENT_TYPE) {
+        const specification = otherDocumentTitle(req.body.title);
+        if (!specification) {
+          return res.status(400).json({ message: 'Specify the document for an Others request' });
+        }
+        req.body.title = specification;
+      } else {
+        req.body.title = documentTypes[0].name;
+      }
     }
 
     const [result] = await pool.execute(config.insert.sql, config.insert.values(req.body, req.user));
@@ -510,21 +530,30 @@ export const updateRequestStatus = async (req, res, next) => {
 // Lets residents or staff edit request title/description while still submitted.
 export const updateRequestDetails = async (req, res, next) => {
   try {
-    const { title, description = '' } = req.body;
-
-    if (!title) {
-      return res.status(400).json({ message: 'Request title is required' });
-    }
+    const { description = '' } = req.body;
+    let { title } = req.body;
 
     const [currentRows] = await pool.execute(
-      `SELECT id, resident_id AS residentId, status
-       FROM service_requests
-       WHERE id = ?`,
+      `SELECT sr.id, sr.resident_id AS residentId, sr.status, dt.name AS documentTypeName
+       FROM service_requests sr
+       LEFT JOIN document_types dt ON dt.id = sr.document_type_id
+       WHERE sr.id = ?`,
       [req.params.id]
     );
 
     if (currentRows.length === 0) return res.status(404).json({ message: 'Request not found' });
     const currentRequest = currentRows[0];
+
+    if (currentRequest.documentTypeName === OTHERS_DOCUMENT_TYPE) {
+      title = otherDocumentTitle(title);
+      if (!title) {
+        return res.status(400).json({ message: 'Specify the document for an Others request' });
+      }
+    } else if (!String(title || '').trim()) {
+      return res.status(400).json({ message: 'Request title is required' });
+    } else {
+      title = String(title).trim();
+    }
 
     if (req.user?.accountType === 'resident') {
       if (currentRequest.residentId !== req.user.id) {

@@ -544,6 +544,11 @@ export const seedPhaseTwoDefaults = async (connection) => {
     ) AS seed_document_types
     WHERE NOT EXISTS (SELECT 1 FROM document_types)
   `);
+  await connection.query(`
+    INSERT INTO document_types (name, description, status)
+    SELECT 'Others', 'A document or request that is not listed. The resident must specify what they need.', 'Active'
+    WHERE NOT EXISTS (SELECT 1 FROM document_types WHERE name = 'Others')
+  `);
 };
 // Entry point called at startup: runs all schema steps then seeds defaults.
 export const ensureCoreSchema = async (connection) => {
