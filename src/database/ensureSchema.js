@@ -169,6 +169,14 @@ export const ensureResidentSchema = async (connection) => {
       AND account_status = 'Inactive'
       AND status IN ('Active', 'Verified', 'Inactive', 'Needs Correction', 'Rejected')
   `);
+  // Stored ages are used by SQL filters (e.g. seniors), so refresh them from birthdates on startup.
+  await connection.query(`
+    UPDATE resident_accounts
+    SET age = TIMESTAMPDIFF(YEAR, birth_date, CURDATE())
+    WHERE birth_date IS NOT NULL
+      AND birth_date <= CURDATE()
+      AND (age IS NULL OR age <> TIMESTAMPDIFF(YEAR, birth_date, CURDATE()))
+  `);
 };
 // Ensures service categories, services, and beneficiary tracking tables exist.
 export const ensureServiceSchema = async (connection) => {
@@ -290,6 +298,30 @@ export const ensureServiceSchema = async (connection) => {
     "resident_accounts",
     "contact_number",
     "contact_number VARCHAR(80) NULL AFTER email",
+  );
+  await addColumnIfMissing(
+    connection,
+    "resident_accounts",
+    "street_address",
+    "street_address VARCHAR(255) NULL AFTER purok_sitio",
+  );
+  await addColumnIfMissing(
+    connection,
+    "resident_accounts",
+    "civil_status",
+    "civil_status VARCHAR(40) NOT NULL DEFAULT 'Unspecified' AFTER gender",
+  );
+  await addColumnIfMissing(
+    connection,
+    "resident_accounts",
+    "nationality",
+    "nationality VARCHAR(80) NULL AFTER civil_status",
+  );
+  await addColumnIfMissing(
+    connection,
+    "resident_accounts",
+    "household_status",
+    "household_status VARCHAR(40) NOT NULL DEFAULT 'Unspecified' AFTER nationality",
   );
   await connection.query(`
     CREATE TABLE IF NOT EXISTS service_beneficiaries (
@@ -482,6 +514,15 @@ export const ensurePhaseTwoSchema = async (connection) => {
       UNIQUE KEY unique_system_setting_key (setting_key)
     )
   `);
+  await connection.query(`
+    CREATE TABLE IF NOT EXISTS revoked_tokens (
+      jti VARCHAR(64) NOT NULL,
+      expires_at DATETIME NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (jti),
+      KEY idx_revoked_tokens_expires_at (expires_at)
+    )
+  `);
 };
 // Inserts starter barangays, categories, offices, announcements, and settings when tables are empty.
 export const seedPhaseTwoDefaults = async (connection) => {
@@ -530,7 +571,9 @@ export const seedPhaseTwoDefaults = async (connection) => {
       ('registration_enabled', 'true', 'Allow residents to submit public account registrations.'),
       ('default_service_visibility', 'own_barangay', 'Default visibility when creating new services.'),
       ('request_auto_notifications', 'true', 'Create resident notifications when request status changes.'),
-      ('system_contact_email', 'admin@community.test', 'Primary contact email shown for system administration.')
+      ('system_contact_email', 'admin@community.test', 'Primary contact email shown for system administration.'),
+      ('session_idle_timeout_minutes', '15', 'Minutes of inactivity before a signed-in user is automatically signed out (1-480).'),
+      ('session_idle_warning_seconds', '60', 'Seconds before automatic sign-out to warn the user and offer to stay signed in (10-600).')
     ON DUPLICATE KEY UPDATE setting_key = VALUES(setting_key)
   `);
   await connection.query(`

@@ -10,7 +10,20 @@ const editableSettings = new Set([
   "default_service_visibility",
   "request_auto_notifications",
   "system_contact_email",
+  "session_idle_timeout_minutes",
+  "session_idle_warning_seconds",
 ]);
+
+const DEFAULT_IDLE_TIMEOUT_MINUTES = 15;
+const DEFAULT_IDLE_WARNING_SECONDS = 60;
+
+const isIntegerInRange = (value, min, max) =>
+  /^\d+$/.test(value) && Number(value) >= min && Number(value) <= max;
+
+const toIntegerSetting = (value, fallback) => {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isNaN(parsed) ? fallback : parsed;
+};
 
 const settingValidators = {
   registration_enabled: (value) => ["true", "false"].includes(value),
@@ -18,6 +31,8 @@ const settingValidators = {
     ["own_barangay", "all_barangays", "public"].includes(value),
   request_auto_notifications: (value) => ["true", "false"].includes(value),
   system_contact_email: (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value),
+  session_idle_timeout_minutes: (value) => isIntegerInRange(value, 1, 480),
+  session_idle_warning_seconds: (value) => isIntegerInRange(value, 10, 600),
 };
 
 // Shapes a database settings row into the camelCase object the API returns.
@@ -50,7 +65,7 @@ export const getPublicSettings = async (req, res, next) => {
     const [rows] = await pool.execute(
       `SELECT setting_key, setting_value
        FROM system_settings
-       WHERE setting_key IN ('registration_enabled', 'system_contact_email')`,
+       WHERE setting_key IN ('registration_enabled', 'system_contact_email', 'session_idle_timeout_minutes', 'session_idle_warning_seconds')`,
     );
     const settings = Object.fromEntries(
       rows.map((row) => [row.setting_key, row.setting_value]),
@@ -61,6 +76,14 @@ export const getPublicSettings = async (req, res, next) => {
         registrationEnabled: settings.registration_enabled !== "false",
         systemContactEmail:
           settings.system_contact_email || "admin@community.test",
+        sessionIdleTimeoutMinutes: toIntegerSetting(
+          settings.session_idle_timeout_minutes,
+          DEFAULT_IDLE_TIMEOUT_MINUTES,
+        ),
+        sessionIdleWarningSeconds: toIntegerSetting(
+          settings.session_idle_warning_seconds,
+          DEFAULT_IDLE_WARNING_SECONDS,
+        ),
       },
     });
   } catch (error) {

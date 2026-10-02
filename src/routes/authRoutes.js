@@ -4,6 +4,7 @@ import {
   changePassword,
   getCurrentUser,
   login,
+  logout,
   registerResident,
   requestPasswordResetOtp,
   requestRegistrationOtp,
@@ -19,6 +20,8 @@ const router = Router();
 router.post('/login', login);
 // Return the user encoded in the JWT (requires login).
 router.get('/me', authenticate, getCurrentUser);
+// Revoke the current token (manual sign-out or idle timeout).
+router.post('/logout', authenticate, logout);
 // Start forgot-password flow by emailing an OTP.
 router.post('/forgot-password/request-otp', requestPasswordResetOtp);
 // Finish forgot-password with OTP + new password.

@@ -1,10 +1,18 @@
 // Auth middleware: verifies JWT tokens and checks roles/permissions on protected routes.
 import jwt from 'jsonwebtoken';
 import { env } from '../config/env.js';
+import { pool } from '../config/db.js';
 import { normalizePermissions, hasPermission } from '../rbac/roles.js';
 
-// Require a valid Bearer token and attach the decoded user to req.user.
-export const authenticate = (req, res, next) => {
+// True when the token was revoked by sign-out (manual or idle timeout).
+const isTokenRevoked = async (jti) => {
+  if (!jti) return false;
+  const [rows] = await pool.execute('SELECT 1 FROM revoked_tokens WHERE jti = ? LIMIT 1', [jti]);
+  return rows.length > 0;
+};
+
+// Require a valid, non-revoked Bearer token and attach the decoded user to req.user.
+export const authenticate = async (req, res, next) => {
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : '';
 
@@ -12,16 +20,22 @@ export const authenticate = (req, res, next) => {
     return res.status(401).json({ message: 'Authentication required' });
   }
 
+  let payload;
   try {
-    const payload = jwt.verify(token, env.jwtSecret);
-    req.user = {
-      ...payload,
-      permissions: normalizePermissions(payload.permissions, payload.role)
-    };
-    return next();
+    payload = jwt.verify(token, env.jwtSecret);
   } catch (error) {
     return res.status(401).json({ message: 'Invalid or expired token' });
   }
+
+  if (await isTokenRevoked(payload.jti)) {
+    return res.status(401).json({ message: 'Session has ended. Please sign in again.' });
+  }
+
+  req.user = {
+    ...payload,
+    permissions: normalizePermissions(payload.permissions, payload.role)
+  };
+  return next();
 };
 
 // Allow only users whose role is in the given list.

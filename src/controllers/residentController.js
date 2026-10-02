@@ -8,61 +8,77 @@ import { PERMISSIONS } from "../rbac/roles.js";
 import { logAudit } from "../utils/auditLogger.js";
 import { hashPassword } from "../utils/password.js";
 import {
+  calculateAge,
+  formatPreciseAge,
+  toDateOnlyString,
+} from "../utils/age.js";
+import {
   formatResidentName,
   normalizeMiddleName,
 } from "../utils/residentName.js";
+import {
+  formatBeneficiaryStatus,
+  formatResidentAddress,
+  normalizeResidentProfileFields,
+} from "../utils/residentProfile.js";
 
 // This controller manages resident account operations on the backend.
 // It validates input, stores resident data, and sends real-time updates after changes.
 
-const formatDateOnly = (value) => {
-  if (!value) return null;
-  if (value instanceof Date) return value.toISOString().slice(0, 10);
-  return String(value).slice(0, 10);
-};
-
-const calculateAge = (birthDate) => {
-  if (!birthDate) return null;
-  const date = new Date(`${birthDate}T00:00:00`);
-  if (Number.isNaN(date.getTime())) return null;
-
-  const today = new Date();
-  let age = today.getFullYear() - date.getFullYear();
-  const monthDelta = today.getMonth() - date.getMonth();
-  if (monthDelta < 0 || (monthDelta === 0 && today.getDate() < date.getDate()))
-    age -= 1;
-  return age;
-};
+const residentSelectColumns = `ra.id, ra.first_name, ra.middle_name, ra.last_name, ra.email, ra.contact_number,
+  ra.barangay, ra.purok_sitio, ra.street_address, ra.birth_date, ra.age, ra.gender, ra.civil_status,
+  ra.nationality, ra.household_status, ra.selfie_id_image, ra.role, ra.verification_status,
+  ra.account_status, ra.status, ra.created_at,
+  (SELECT COUNT(*) FROM service_beneficiaries sb
+    WHERE sb.resident_id = ra.id AND sb.status = 'Served') AS served_programs`;
 
 // Converts a database resident row into the camelCase shape the frontend expects.
-const mapResident = (resident) => ({
-  id: `RES-${String(resident.id).padStart(4, "0")}`,
-  rawId: resident.id,
-  name: formatResidentName(
-    resident.first_name,
-    resident.middle_name,
-    resident.last_name,
-  ),
-  firstName: resident.first_name,
-  middleName: resident.middle_name || "",
-  lastName: resident.last_name,
-  email: resident.email,
-  contact: resident.contact_number || resident.email,
-  contactNumber: resident.contact_number || "",
-  barangay: resident.barangay,
-  purokSitio: resident.purok_sitio || "",
-  birthDate: formatDateOnly(resident.birth_date),
-  age: resident.age || null,
-  gender: resident.gender || "Unspecified",
-  hasSelfieId: Boolean(resident.selfie_id_image),
-  verificationStatus: resident.verification_status || resident.status,
-  accountStatus:
-    resident.account_status ||
-    (resident.status === "Inactive" ? "Inactive" : "Active"),
-  status: resident.verification_status || resident.status,
-  role: resident.role,
-  createdAt: resident.created_at,
-});
+const mapResident = (resident) => {
+  const birthDate = toDateOnlyString(resident.birth_date);
+  const liveAge = calculateAge(birthDate);
+  const servedPrograms = Number(resident.served_programs || 0);
+
+  return {
+    id: `RES-${String(resident.id).padStart(4, "0")}`,
+    rawId: resident.id,
+    name: formatResidentName(
+      resident.first_name,
+      resident.middle_name,
+      resident.last_name,
+    ),
+    firstName: resident.first_name,
+    middleName: resident.middle_name || "",
+    lastName: resident.last_name,
+    email: resident.email,
+    contact: resident.contact_number || resident.email,
+    contactNumber: resident.contact_number || "",
+    barangay: resident.barangay,
+    purokSitio: resident.purok_sitio || "",
+    streetAddress: resident.street_address || "",
+    address: formatResidentAddress({
+      streetAddress: resident.street_address,
+      purokSitio: resident.purok_sitio,
+      barangay: resident.barangay,
+    }),
+    birthDate,
+    age: liveAge ?? resident.age ?? null,
+    preciseAge: formatPreciseAge(birthDate),
+    gender: resident.gender || "Unspecified",
+    civilStatus: resident.civil_status || "Unspecified",
+    nationality: resident.nationality || "",
+    householdStatus: resident.household_status || "Unspecified",
+    servedPrograms,
+    beneficiaryStatus: formatBeneficiaryStatus(servedPrograms),
+    hasSelfieId: Boolean(resident.selfie_id_image),
+    verificationStatus: resident.verification_status || resident.status,
+    accountStatus:
+      resident.account_status ||
+      (resident.status === "Inactive" ? "Inactive" : "Active"),
+    status: resident.verification_status || resident.status,
+    role: resident.role,
+    createdAt: resident.created_at,
+  };
+};
 
 const allowedVerificationStatuses = [
   "Pending",
@@ -71,7 +87,6 @@ const allowedVerificationStatuses = [
   "Rejected",
 ];
 const allowedAccountStatuses = ["Active", "Inactive"];
-const allowedGenders = ["Female", "Male", "Unspecified"];
 
 // Staff without view-all permission are limited to their assigned barangay.
 const canViewAllResidents = (user) =>
@@ -94,9 +109,9 @@ const getResidentScope = (user, tableAlias = "") => {
 // Loads one resident by id and maps it for API responses.
 const getResidentById = async (id) => {
   const [rows] = await pool.execute(
-    `SELECT id, first_name, middle_name, last_name, email, contact_number, barangay, purok_sitio, birth_date, age, gender, selfie_id_image, role, verification_status, account_status, status, created_at
-     FROM resident_accounts
-     WHERE id = ?`,
+    `SELECT ${residentSelectColumns}
+     FROM resident_accounts ra
+     WHERE ra.id = ?`,
     [id],
   );
 
@@ -127,9 +142,7 @@ const normalizeResidentPayload = (body, existing = {}) => {
       body.birthDate === ""
         ? null
         : (body.birthDate ?? existing.birthDate ?? null),
-    gender: body.gender ?? existing.gender ?? "Unspecified",
-    purokSitio: body.purokSitio ?? existing.purokSitio ?? "",
-    contactNumber: body.contactNumber ?? existing.contactNumber ?? "",
+    ...normalizeResidentProfileFields(body, existing),
     verificationStatus:
       body.verificationStatus ??
       body.status ??
@@ -176,12 +189,6 @@ const normalizeResidentPayload = (body, existing = {}) => {
     });
   }
 
-  if (!allowedGenders.includes(payload.gender)) {
-    throw Object.assign(new Error("Invalid resident gender"), {
-      statusCode: 400,
-    });
-  }
-
   if (!allowedVerificationStatuses.includes(payload.verificationStatus)) {
     throw Object.assign(new Error("Invalid resident verification status"), {
       statusCode: 400,
@@ -204,13 +211,13 @@ const normalizeResidentPayload = (body, existing = {}) => {
 // Lists residents visible to the current user, newest first.
 export const getResidents = async (req, res, next) => {
   try {
-    const scope = getResidentScope(req.user);
+    const scope = getResidentScope(req.user, "ra");
     const where = scope.clause ? `WHERE ${scope.clause}` : "";
     const [residents] = await pool.execute(
-      `SELECT id, first_name, middle_name, last_name, email, contact_number, barangay, purok_sitio, birth_date, age, gender, selfie_id_image, role, verification_status, account_status, status, created_at
-       FROM resident_accounts
+      `SELECT ${residentSelectColumns}
+       FROM resident_accounts ra
        ${where}
-       ORDER BY created_at DESC`,
+       ORDER BY ra.created_at DESC`,
       scope.values,
     );
 
@@ -230,8 +237,8 @@ export const createResident = async (req, res, next) => {
 
     const [result] = await pool.execute(
       `INSERT INTO resident_accounts
-        (first_name, middle_name, last_name, email, contact_number, barangay, purok_sitio, birth_date, age, gender, password_hash, selfie_id_image, verification_status, account_status, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (first_name, middle_name, last_name, email, contact_number, barangay, purok_sitio, street_address, birth_date, age, gender, civil_status, nationality, household_status, password_hash, selfie_id_image, verification_status, account_status, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         payload.firstName,
         payload.middleName,
@@ -240,9 +247,13 @@ export const createResident = async (req, res, next) => {
         payload.contactNumber,
         payload.barangay,
         payload.purokSitio,
+        payload.streetAddress,
         payload.birthDate,
         payload.age,
         payload.gender,
+        payload.civilStatus,
+        payload.nationality,
+        payload.householdStatus,
         passwordHash,
         req.file?.path || null,
         payload.verificationStatus,
@@ -308,9 +319,13 @@ export const updateResident = async (req, res, next) => {
       payload.contactNumber,
       payload.barangay,
       payload.purokSitio,
+      payload.streetAddress,
       payload.birthDate,
       payload.age,
       payload.gender,
+      payload.civilStatus,
+      payload.nationality,
+      payload.householdStatus,
       payload.verificationStatus,
       payload.accountStatus,
       payload.verificationStatus === "Verified"
@@ -334,7 +349,7 @@ export const updateResident = async (req, res, next) => {
 
     await pool.execute(
       `UPDATE resident_accounts
-       SET first_name = ?, middle_name = ?, last_name = ?, email = ?, contact_number = ?, barangay = ?, purok_sitio = ?, birth_date = ?, age = ?, gender = ?, verification_status = ?, account_status = ?, status = ?${passwordSql}${selfieSql}
+       SET first_name = ?, middle_name = ?, last_name = ?, email = ?, contact_number = ?, barangay = ?, purok_sitio = ?, street_address = ?, birth_date = ?, age = ?, gender = ?, civil_status = ?, nationality = ?, household_status = ?, verification_status = ?, account_status = ?, status = ?${passwordSql}${selfieSql}
        WHERE id = ?`,
       values,
     );
@@ -412,7 +427,7 @@ export const updateMyResidentProfile = async (req, res, next) => {
 
     await pool.execute(
       `UPDATE resident_accounts
-       SET first_name = ?, middle_name = ?, last_name = ?, contact_number = ?, purok_sitio = ?, birth_date = ?, age = ?, gender = ?
+       SET first_name = ?, middle_name = ?, last_name = ?, contact_number = ?, purok_sitio = ?, street_address = ?, birth_date = ?, age = ?, gender = ?, civil_status = ?, nationality = ?, household_status = ?
        WHERE id = ?`,
       [
         payload.firstName,
@@ -420,9 +435,13 @@ export const updateMyResidentProfile = async (req, res, next) => {
         payload.lastName,
         payload.contactNumber,
         payload.purokSitio,
+        payload.streetAddress,
         payload.birthDate,
         payload.age,
         payload.gender,
+        payload.civilStatus,
+        payload.nationality,
+        payload.householdStatus,
         req.user.id,
       ],
     );
@@ -440,8 +459,12 @@ export const updateMyResidentProfile = async (req, res, next) => {
         lastName: payload.lastName,
         contactNumber: payload.contactNumber,
         purokSitio: payload.purokSitio,
+        streetAddress: payload.streetAddress,
         birthDate: payload.birthDate,
         gender: payload.gender,
+        civilStatus: payload.civilStatus,
+        nationality: payload.nationality,
+        householdStatus: payload.householdStatus,
       },
     });
     emitRealtimeEvent("residents:changed", {

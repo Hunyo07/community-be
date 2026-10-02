@@ -1,6 +1,11 @@
 import { pool } from "../config/db.js";
 import { PERMISSIONS, ROLES } from "../rbac/roles.js";
+import { formatPreciseAge, toDateOnlyString } from "../utils/age.js";
 import { formatResidentName } from "../utils/residentName.js";
+import {
+  formatBeneficiaryStatus,
+  formatResidentAddress,
+} from "../utils/residentProfile.js";
 
 // Builds filtered tabular reports for residents and other operational modules.
 
@@ -167,45 +172,68 @@ const getResidentsReport = async ({ user, from, to, barangay, verificationStatus
     canViewAllResidentBarangays(user),
   );
 
-  pushEquals(filters, values, "barangay", scopedBarangay);
-  pushEquals(filters, values, "verification_status", verificationStatus);
-  pushEquals(filters, values, "account_status", accountStatus);
-  pushDateRange(filters, values, "created_at", from, to);
+  pushEquals(filters, values, "ra.barangay", scopedBarangay);
+  pushEquals(filters, values, "ra.verification_status", verificationStatus);
+  pushEquals(filters, values, "ra.account_status", accountStatus);
+  pushDateRange(filters, values, "ra.created_at", from, to);
 
   const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
   const [rows] = await pool.execute(
-    `SELECT id, first_name, middle_name, last_name, barangay, purok_sitio, gender, age,
-            verification_status, account_status, created_at
-     FROM resident_accounts
+    `SELECT ra.id, ra.first_name, ra.middle_name, ra.last_name, ra.barangay, ra.purok_sitio,
+            ra.street_address, ra.contact_number, ra.email, ra.birth_date, ra.gender, ra.age,
+            ra.civil_status, ra.nationality, ra.household_status,
+            ra.verification_status, ra.account_status, ra.created_at,
+            (SELECT COUNT(*) FROM service_beneficiaries sb
+              WHERE sb.resident_id = ra.id AND sb.status = 'Served') AS served_programs
+     FROM resident_accounts ra
      ${where}
-     ORDER BY last_name ASC, first_name ASC`,
+     ORDER BY ra.last_name ASC, ra.first_name ASC`,
     values,
   );
 
-  const mapped = rows.map((row) => ({
-    id: padId("RES", row.id),
-    name: formatResidentName(row.first_name, row.middle_name, row.last_name),
-    barangay: row.barangay,
-    purokSitio: row.purok_sitio || "",
-    gender: row.gender || "Unspecified",
-    age: row.age || "",
-    verificationStatus: row.verification_status,
-    accountStatus: row.account_status,
-    createdAt: row.created_at,
-  }));
+  const mapped = rows.map((row) => {
+    const birthDate = toDateOnlyString(row.birth_date);
+    return {
+      id: padId("RES", row.id),
+      name: formatResidentName(row.first_name, row.middle_name, row.last_name),
+      birthDate,
+      age: formatPreciseAge(birthDate) || row.age || "",
+      gender: row.gender || "Unspecified",
+      civilStatus: row.civil_status || "Unspecified",
+      nationality: row.nationality || "",
+      barangay: row.barangay,
+      address: formatResidentAddress({
+        streetAddress: row.street_address,
+        purokSitio: row.purok_sitio,
+      }),
+      contactNumber: row.contact_number || row.email || "",
+      householdStatus: row.household_status || "Unspecified",
+      beneficiaryStatus: formatBeneficiaryStatus(row.served_programs),
+      verificationStatus: row.verification_status,
+      accountStatus: row.account_status,
+      createdAt: row.created_at,
+    };
+  });
 
   const verified = mapped.filter((row) => row.verificationStatus === "Verified").length;
   const pending = mapped.filter((row) => row.verificationStatus === "Pending").length;
   const rejected = mapped.filter((row) => row.verificationStatus === "Rejected").length;
+  const beneficiaries = rows.filter((row) => Number(row.served_programs) > 0).length;
 
   return {
     columns: [
       { key: "id", label: "Resident ID" },
-      { key: "name", label: "Name" },
-      { key: "barangay", label: "Barangay" },
-      { key: "purokSitio", label: "Purok/Sitio" },
-      { key: "gender", label: "Gender" },
+      { key: "name", label: "Full Name" },
+      { key: "birthDate", label: "Birthdate" },
       { key: "age", label: "Age" },
+      { key: "gender", label: "Gender" },
+      { key: "civilStatus", label: "Civil Status" },
+      { key: "nationality", label: "Nationality" },
+      { key: "barangay", label: "Barangay" },
+      { key: "address", label: "Address" },
+      { key: "contactNumber", label: "Contact" },
+      { key: "householdStatus", label: "Household Status" },
+      { key: "beneficiaryStatus", label: "Beneficiary Status" },
       { key: "verificationStatus", label: "Verification" },
       { key: "accountStatus", label: "Account" },
       { key: "createdAt", label: "Registered" },
@@ -216,6 +244,7 @@ const getResidentsReport = async ({ user, from, to, barangay, verificationStatus
       { label: "Verified", value: formatCount(verified) },
       { label: "Pending", value: formatCount(pending) },
       { label: "Rejected", value: formatCount(rejected) },
+      { label: "Beneficiaries", value: formatCount(beneficiaries) },
     ],
   };
 };

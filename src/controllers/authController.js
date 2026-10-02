@@ -7,28 +7,19 @@ import { assertMailerConfigured, sendOtpEmail, sendPasswordResetOtpEmail } from 
 import { emitRealtimeEvent } from '../realtime/socket.js';
 import { normalizePermissions, PERMISSIONS, ROLES } from '../rbac/roles.js';
 import { logAudit } from '../utils/auditLogger.js';
+import { calculateAge } from '../utils/age.js';
 import { hashPassword, verifyPassword } from '../utils/password.js';
 import { isSettingEnabled } from '../utils/settings.js';
 import {
   formatResidentName,
   normalizeMiddleName,
 } from '../utils/residentName.js';
+import { normalizeResidentProfileFields } from '../utils/residentProfile.js';
 
 // Create a 6-digit one-time password for email verification.
 const generateOtp = () => String(crypto.randomInt(100000, 999999));
 // Store OTPs as hashes so the plain code is not kept in the database.
 const hashOtp = (otp) => crypto.createHash('sha256').update(otp).digest('hex');
-// Compute age in years from a YYYY-MM-DD birth date.
-const calculateAge = (birthDate) => {
-  const date = new Date(`${birthDate}T00:00:00`);
-  if (Number.isNaN(date.getTime())) return null;
-
-  const today = new Date();
-  let age = today.getFullYear() - date.getFullYear();
-  const monthDelta = today.getMonth() - date.getMonth();
-  if (monthDelta < 0 || (monthDelta === 0 && today.getDate() < date.getDate())) age -= 1;
-  return age;
-};
 
 // Throws a 400 error if any required body field is missing.
 const requireFields = (body, fields) => {
@@ -106,7 +97,7 @@ const createToken = (user) =>
       accountType: user.accountType
     },
     env.jwtSecret,
-    { expiresIn: env.jwtExpiresIn }
+    { expiresIn: env.jwtExpiresIn, jwtid: crypto.randomUUID() }
   );
 
 // Look up a resident account by email for login/password flows.
@@ -269,6 +260,37 @@ export const getCurrentUser = (req, res) => {
       }
     }
   });
+};
+
+const logoutReasons = new Set(['manual', 'idle_timeout']);
+
+// Revoke the current JWT so it cannot be reused after sign-out (manual or idle timeout).
+export const logout = async (req, res, next) => {
+  try {
+    const reason = logoutReasons.has(req.body?.reason) ? req.body.reason : 'manual';
+
+    if (req.user.jti && req.user.exp) {
+      await pool.execute('DELETE FROM revoked_tokens WHERE expires_at < NOW()');
+      await pool.execute(
+        `INSERT INTO revoked_tokens (jti, expires_at)
+         VALUES (?, FROM_UNIXTIME(?))
+         ON DUPLICATE KEY UPDATE expires_at = VALUES(expires_at)`,
+        [req.user.jti, req.user.exp]
+      );
+    }
+
+    await logAudit({
+      user: req.user,
+      action: reason === 'idle_timeout' ? 'auth.logout_idle_timeout' : 'auth.logout',
+      entityType: req.user.accountType === 'resident' ? 'resident_accounts' : 'staff_accounts',
+      entityId: req.user.id,
+      details: { email: req.user.email, reason }
+    });
+
+    return res.json({ message: 'Signed out successfully' });
+  } catch (error) {
+    return next(error);
+  }
 };
 
 // Email a password-reset OTP if the account exists (always returns a generic message).
@@ -473,10 +495,11 @@ export const registerResident = async (req, res, next) => {
 
     const { firstName, lastName, email, barangay, birthDate, password, otp } = req.body;
     const middleName = normalizeMiddleName(req.body.middleName);
+    const profile = normalizeResidentProfileFields(req.body);
     const age = calculateAge(birthDate);
 
-    if (age === null || age < 13 || age > 120) {
-      return res.status(400).json({ message: 'Birthdate must be valid and account holder must be at least 13 years old' });
+    if (age === null || age > 120) {
+      return res.status(400).json({ message: 'Birthdate must be a valid date between 120 years ago and today' });
     }
 
     const [otps] = await pool.execute(
@@ -497,9 +520,26 @@ export const registerResident = async (req, res, next) => {
 
     const [result] = await pool.execute(
       `INSERT INTO resident_accounts
-        (first_name, middle_name, last_name, email, barangay, birth_date, age, password_hash, selfie_id_image, verification_status, account_status, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', 'Inactive', 'Pending')`,
-      [firstName, middleName, lastName, email, barangay, birthDate, age, passwordHash, req.file.path]
+        (first_name, middle_name, last_name, email, contact_number, barangay, purok_sitio, street_address, birth_date, age, gender, civil_status, nationality, household_status, password_hash, selfie_id_image, verification_status, account_status, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', 'Inactive', 'Pending')`,
+      [
+        firstName,
+        middleName,
+        lastName,
+        email,
+        profile.contactNumber,
+        barangay,
+        profile.purokSitio,
+        profile.streetAddress,
+        birthDate,
+        age,
+        profile.gender,
+        profile.civilStatus,
+        profile.nationality,
+        profile.householdStatus,
+        passwordHash,
+        req.file.path
+      ]
     );
 
     await pool.execute('DELETE FROM registration_otps WHERE email = ?', [email]);
