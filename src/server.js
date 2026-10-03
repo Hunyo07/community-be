@@ -21,6 +21,9 @@ initializeSocket(io);
 // Boot sequence: DB check → schema → listen on configured host/port.
 const startServer = async () => {
   try {
+    console.log(
+      `Connecting to MySQL at ${env.db.host}:${env.db.port} as ${env.db.user}, database ${env.db.database}, password=${env.db.password ? "set" : "missing"}`,
+    );
     await testConnection();
     const connection = await pool.getConnection();
     try {
