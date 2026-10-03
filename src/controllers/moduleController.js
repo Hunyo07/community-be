@@ -5,6 +5,7 @@ import { emitRealtimeEvent } from '../realtime/socket.js';
 import { normalizePermissions } from '../rbac/roles.js';
 import { logAudit } from '../utils/auditLogger.js';
 import { hashPassword } from '../utils/password.js';
+import { PASSWORD_POLICY_MESSAGE, isValidAccountPassword } from '../utils/passwordPolicy.js';
 import { isSettingEnabled } from '../utils/settings.js';
 
 // This controller powers shared “module” APIs: barangays, offices, requests, staff, and more.
@@ -754,11 +755,16 @@ export const listStaff = async (req, res, next) => {
 // Creates a staff account (or upserts by email) with hashed password and permissions.
 export const createStaff = async (req, res, next) => {
   try {
-    const { name, email, barangay = null, officeId = null, role = 'barangay_staff', password = 'Staff@123', status = 'Active' } = req.body;
+    const { name, email, barangay = null, officeId = null, role = 'barangay_staff', status = 'Active' } = req.body;
+    const password = req.body.password === undefined || req.body.password === null ? 'Staff@123' : req.body.password;
     const permissions = normalizePermissions(req.body.permissions, role);
 
     if (!name || !email) {
       return res.status(400).json({ message: 'Name and email are required' });
+    }
+
+    if (req.body.password && !isValidAccountPassword(password)) {
+      return res.status(400).json({ message: PASSWORD_POLICY_MESSAGE });
     }
 
     const [result] = await pool.execute(
@@ -786,6 +792,10 @@ export const updateStaff = async (req, res, next) => {
 
     if (!name || !email) {
       return res.status(400).json({ message: 'Name and email are required' });
+    }
+
+    if (password && !isValidAccountPassword(password)) {
+      return res.status(400).json({ message: PASSWORD_POLICY_MESSAGE });
     }
 
     const [existingRows] = await pool.execute('SELECT id FROM staff_accounts WHERE id = ?', [req.params.id]);

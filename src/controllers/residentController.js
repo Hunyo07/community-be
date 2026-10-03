@@ -7,6 +7,7 @@ import { emitRealtimeEvent } from "../realtime/socket.js";
 import { PERMISSIONS } from "../rbac/roles.js";
 import { logAudit } from "../utils/auditLogger.js";
 import { hashPassword } from "../utils/password.js";
+import { PASSWORD_POLICY_MESSAGE, isValidAccountPassword } from "../utils/passwordPolicy.js";
 import {
   calculateAge,
   formatPreciseAge,
@@ -203,6 +204,10 @@ const normalizeResidentPayload = (body, existing = {}) => {
 
   if (payload.verificationStatus !== "Verified") {
     payload.accountStatus = "Inactive";
+  }
+
+  if (payload.password && !isValidAccountPassword(payload.password)) {
+    throw Object.assign(new Error(PASSWORD_POLICY_MESSAGE), { statusCode: 400 });
   }
 
   return payload;

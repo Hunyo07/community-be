@@ -9,6 +9,7 @@ import { normalizePermissions, PERMISSIONS, ROLES } from '../rbac/roles.js';
 import { logAudit } from '../utils/auditLogger.js';
 import { calculateAge } from '../utils/age.js';
 import { hashPassword, verifyPassword } from '../utils/password.js';
+import { PASSWORD_POLICY_MESSAGE, isValidAccountPassword } from '../utils/passwordPolicy.js';
 import { isSettingEnabled } from '../utils/settings.js';
 import {
   formatResidentName,
@@ -341,8 +342,8 @@ export const resetPasswordWithOtp = async (req, res, next) => {
     const { email, otp, password } = req.body;
     requireFields(req.body, ['email', 'otp', 'password']);
 
-    if (String(password).length < 8) {
-      return res.status(400).json({ message: 'Password must be at least 8 characters long' });
+    if (!isValidAccountPassword(password)) {
+      return res.status(400).json({ message: PASSWORD_POLICY_MESSAGE });
     }
 
     const user = await findResettableUser(email);
@@ -383,8 +384,8 @@ export const changePassword = async (req, res, next) => {
     const { currentPassword, newPassword } = req.body;
     requireFields(req.body, ['currentPassword', 'newPassword']);
 
-    if (String(newPassword).length < 8) {
-      return res.status(400).json({ message: 'New password must be at least 8 characters long' });
+    if (!isValidAccountPassword(newPassword)) {
+      return res.status(400).json({ message: PASSWORD_POLICY_MESSAGE });
     }
 
     const user = await getUserByEmail(req.user.email);
@@ -500,6 +501,10 @@ export const registerResident = async (req, res, next) => {
 
     if (age === null || age > 120) {
       return res.status(400).json({ message: 'Birthdate must be a valid date between 120 years ago and today' });
+    }
+
+    if (!isValidAccountPassword(password)) {
+      return res.status(400).json({ message: PASSWORD_POLICY_MESSAGE });
     }
 
     const [otps] = await pool.execute(
