@@ -7,7 +7,8 @@
   "scripts": {
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
-    "seed:users": "node src/seeders/userSeeder.js",
+"test": "vitest run",
+"seed:users": "node src/seeders/userSeeder.js",
     "seed:barangays": "node src/seeders/barangaySeeder.js",
     "smoke:api": "node src/scripts/smokeApi.js",
     "smoke:db": "node src/scripts/smokeDatabase.js",
@@ -24,6 +25,7 @@
     "socket.io": "^4.8.3"
   },
   "devDependencies": {
-    "nodemon": "^3.1.11"
+    "nodemon": "^3.1.11",
+    "vitest": "^5.0.3"
   }
 }

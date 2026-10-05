@@ -18,8 +18,9 @@ export const RESIDENT_HOUSEHOLD_STATUSES = [
 export const RESIDENT_CITY = "Tarlac City";
 
 // Joins street, purok/sitio, and barangay into a single readable address.
-export const formatResidentAddress = ({ streetAddress, purokSitio, barangay }) =>
-  [
+export const formatResidentAddress = (address) => {
+  const { streetAddress, purokSitio, barangay } = address ?? {};
+  return [
     streetAddress,
     purokSitio,
     barangay ? `Brgy. ${barangay}` : "",
@@ -28,11 +29,12 @@ export const formatResidentAddress = ({ streetAddress, purokSitio, barangay }) =
     .map((part) => String(part || "").trim())
     .filter(Boolean)
     .join(", ");
+};
 
 // Residents served by at least one program are considered beneficiaries.
 export const formatBeneficiaryStatus = (servedCount) => {
   const count = Number(servedCount || 0);
-  if (count <= 0) return "Not a beneficiary";
+  if (!Number.isFinite(count) || count <= 0) return "Not a beneficiary";
   return `Beneficiary (${count} program${count === 1 ? "" : "s"})`;
 };
 
