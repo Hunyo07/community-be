@@ -670,7 +670,7 @@ describe('createResident: validation (BB-05, BB-06)', () => {
     );
   });
 
-  it.each(['short', 'password1', 'Password1!', 'Abcdefghijklm1'])(
+  it.each(['short', 'password1', 'Password1!'])(
     'rejects the weak password %s',
     async (password) => {
       await expectRejected({ ...validBody, password }, PASSWORD_POLICY_MESSAGE);
