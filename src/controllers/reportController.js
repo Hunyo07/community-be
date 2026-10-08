@@ -1,6 +1,7 @@
 import { pool } from "../config/db.js";
 import { PERMISSIONS, ROLES } from "../rbac/roles.js";
 import { formatPreciseAge, toDateOnlyString } from "../utils/age.js";
+import { isBarangayAdmin, isCityWideAdmin } from "../utils/barangayScope.js";
 import { formatResidentName } from "../utils/residentName.js";
 import {
   formatBeneficiaryStatus,
@@ -39,18 +40,32 @@ const formatCount = (value) => numberFormat.format(Number(value || 0));
 
 const isBarangayStaff = (user) => user?.role === ROLES.BARANGAY_STAFF;
 
-const canViewAllResidentBarangays = (user) =>
-  !isBarangayStaff(user) ||
-  user.permissions?.includes(PERMISSIONS.RESIDENTS_VIEW_ALL);
+const canViewAllResidentBarangays = (user) => {
+  if (isCityWideAdmin(user)) return true;
+  if (isBarangayAdmin(user)) return false;
+  return (
+    !isBarangayStaff(user) ||
+    user.permissions?.includes(PERMISSIONS.RESIDENTS_VIEW_ALL)
+  );
+};
 
-const canViewAllServiceBarangays = (user) =>
-  !isBarangayStaff(user) ||
-  user.permissions?.includes(PERMISSIONS.SERVICES_VIEW_ALL_BARANGAYS);
+const canViewAllServiceBarangays = (user) => {
+  if (isCityWideAdmin(user)) return true;
+  if (isBarangayAdmin(user)) return false;
+  return (
+    !isBarangayStaff(user) ||
+    user.permissions?.includes(PERMISSIONS.SERVICES_VIEW_ALL_BARANGAYS)
+  );
+};
 
-const canViewAllServiceOffices = (user) =>
-  !isBarangayStaff(user) ||
-  user.permissions?.includes(PERMISSIONS.SERVICES_VIEW_ALL_OFFICES) ||
-  user.permissions?.includes(PERMISSIONS.SERVICES_VIEW_ALL_BARANGAYS);
+const canViewAllServiceOffices = (user) => {
+  if (isCityWideAdmin(user) || isBarangayAdmin(user)) return true;
+  return (
+    !isBarangayStaff(user) ||
+    user.permissions?.includes(PERMISSIONS.SERVICES_VIEW_ALL_OFFICES) ||
+    user.permissions?.includes(PERMISSIONS.SERVICES_VIEW_ALL_BARANGAYS)
+  );
+};
 
 const resolveBarangay = (user, requested, canViewAll) => {
   if (!canViewAll) return user?.barangay || "";
@@ -106,14 +121,15 @@ const remainingCount = (target, served) =>
   Math.max(Number(target || 0) - Number(served || 0), 0);
 
 const applyServiceScope = (user, filters, values) => {
-  if (!isBarangayStaff(user)) return;
+  if (isCityWideAdmin(user)) return;
+  if (!isBarangayStaff(user) && !isBarangayAdmin(user)) return;
 
   if (!canViewAllServiceBarangays(user)) {
     filters.push("services.barangay = ?");
     values.push(user.barangay || "");
   }
 
-  if (!canViewAllServiceOffices(user)) {
+  if (isBarangayStaff(user) && !canViewAllServiceOffices(user)) {
     filters.push("(services.office_id = ? OR services.office_id IS NULL)");
     values.push(user.officeId || 0);
   }

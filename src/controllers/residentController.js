@@ -5,6 +5,8 @@ import { pool } from "../config/db.js";
 import { sendAccountStatusEmail } from "../config/mailer.js";
 import { emitRealtimeEvent } from "../realtime/socket.js";
 import { PERMISSIONS } from "../rbac/roles.js";
+import { isBarangayAdmin, isCityWideAdmin } from "../utils/barangayScope.js";
+import { assertKnownBarangay } from "../utils/knownBarangay.js";
 import { logAudit } from "../utils/auditLogger.js";
 import { hashPassword } from "../utils/password.js";
 import { PASSWORD_POLICY_MESSAGE, isValidAccountPassword } from "../utils/passwordPolicy.js";
@@ -13,10 +15,8 @@ import {
   formatPreciseAge,
   toDateOnlyString,
 } from "../utils/age.js";
-import {
-  formatResidentName,
-  normalizeMiddleName,
-} from "../utils/residentName.js";
+import { assertEmail, assertPersonName } from "../utils/personName.js";
+import { formatResidentName } from "../utils/residentName.js";
 import {
   formatBeneficiaryStatus,
   formatResidentAddress,
@@ -89,10 +89,16 @@ const allowedVerificationStatuses = [
 ];
 const allowedAccountStatuses = ["Active", "Inactive"];
 
-// Staff without view-all permission are limited to their assigned barangay.
-const canViewAllResidents = (user) =>
-  user?.role !== "barangay_staff" ||
-  user.permissions?.includes(PERMISSIONS.RESIDENTS_VIEW_ALL);
+// City-wide admins see every barangay. A barangay admin stays in their own.
+// Barangay staff stay scoped unless they were granted residents:view_all.
+const canViewAllResidents = (user) => {
+  if (isCityWideAdmin(user)) return true;
+  if (isBarangayAdmin(user)) return false;
+  return (
+    user?.role !== "barangay_staff" ||
+    user.permissions?.includes(PERMISSIONS.RESIDENTS_VIEW_ALL)
+  );
+};
 
 // Builds a SQL WHERE clause that scopes resident queries to the user's barangay.
 const getResidentScope = (user, tableAlias = "") => {
@@ -131,18 +137,35 @@ const applyResidentWriteScope = (payload, user) => {
 
 // Validates and normalizes create/update fields for a resident account.
 const normalizeResidentPayload = (body, existing = {}) => {
+  const firstName = String(body.firstName ?? existing.firstName ?? "").trim();
+  const lastName = String(body.lastName ?? existing.lastName ?? "").trim();
+  const email = String(body.email ?? existing.email ?? "").trim();
+  const barangay = String(body.barangay ?? existing.barangay ?? "").trim();
+  const birthDate =
+    body.birthDate === ""
+      ? null
+      : (body.birthDate ?? existing.birthDate ?? null);
+
+  if (!firstName || !lastName || !email || !barangay || !birthDate) {
+    throw Object.assign(
+      new Error(
+        "First name, last name, email, barangay, and birthdate are required",
+      ),
+      { statusCode: 400 },
+    );
+  }
+
   const payload = {
-    firstName: body.firstName ?? existing.firstName,
-    middleName: normalizeMiddleName(
+    firstName: assertPersonName(firstName, "First name"),
+    middleName: assertPersonName(
       body.middleName !== undefined ? body.middleName : existing.middleName,
+      "Middle name",
+      { required: false },
     ),
-    lastName: body.lastName ?? existing.lastName,
-    email: body.email ?? existing.email,
-    barangay: body.barangay ?? existing.barangay,
-    birthDate:
-      body.birthDate === ""
-        ? null
-        : (body.birthDate ?? existing.birthDate ?? null),
+    lastName: assertPersonName(lastName, "Last name"),
+    email: assertEmail(email),
+    barangay,
+    birthDate,
     ...normalizeResidentProfileFields(body, existing),
     verificationStatus:
       body.verificationStatus ??
@@ -158,21 +181,6 @@ const normalizeResidentPayload = (body, existing = {}) => {
     : body.age === "" || body.age === undefined
       ? (existing.age ?? null)
       : Number(body.age);
-
-  if (
-    !payload.firstName ||
-    !payload.lastName ||
-    !payload.email ||
-    !payload.barangay ||
-    !payload.birthDate
-  ) {
-    throw Object.assign(
-      new Error(
-        "First name, last name, email, barangay, and birthdate are required",
-      ),
-      { statusCode: 400 },
-    );
-  }
 
   if (payload.age === null || payload.age < 0 || payload.age > 120) {
     throw Object.assign(
@@ -238,6 +246,7 @@ export const createResident = async (req, res, next) => {
     const payload = normalizeResidentPayload(
       applyResidentWriteScope(req.body, req.user),
     );
+    payload.barangay = await assertKnownBarangay(payload.barangay);
     const passwordHash = hashPassword(payload.password || "Resident@123");
 
     const [result] = await pool.execute(
@@ -316,6 +325,7 @@ export const updateResident = async (req, res, next) => {
       normalizeResidentPayload(req.body, existing),
       req.user,
     );
+    payload.barangay = await assertKnownBarangay(payload.barangay);
     const values = [
       payload.firstName,
       payload.middleName,
@@ -429,6 +439,7 @@ export const updateMyResidentProfile = async (req, res, next) => {
       },
       existing,
     );
+    payload.barangay = await assertKnownBarangay(payload.barangay);
 
     await pool.execute(
       `UPDATE resident_accounts

@@ -2,11 +2,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pool } from '../config/db.js';
 import { emitRealtimeEvent } from '../realtime/socket.js';
-import { normalizePermissions } from '../rbac/roles.js';
+import { ROLES, normalizePermissions } from '../rbac/roles.js';
 import { logAudit } from '../utils/auditLogger.js';
-import { hashPassword } from '../utils/password.js';
+import { hashPassword, verifyPassword } from '../utils/password.js';
 import { PASSWORD_POLICY_MESSAGE, isValidAccountPassword } from '../utils/passwordPolicy.js';
 import { isSettingEnabled } from '../utils/settings.js';
+import { managesSingleBarangay } from '../utils/barangayScope.js';
+import { assertKnownBarangay } from '../utils/knownBarangay.js';
+import { assertEmail, assertPersonName } from '../utils/personName.js';
 
 // This controller powers shared “module” APIs: barangays, offices, requests, staff, and more.
 // Factory handlers (listModule, createModule, updateModule) reuse one tableMap config per resource.
@@ -64,6 +67,23 @@ const getCurrentUserBarangay = async (user) => {
   }
 
   return user.barangay || null;
+};
+
+// Stops a barangay admin or staff member from editing another barangay's record.
+const assertOwnBarangayRecord = async (moduleName, user, id) => {
+  if (!managesSingleBarangay(user)) return null;
+  if (moduleName !== 'offices' && moduleName !== 'announcements') return null;
+
+  const table = moduleName === 'offices' ? 'offices' : 'announcements';
+  const [rows] = await pool.execute(`SELECT barangay FROM ${table} WHERE id = ?`, [id]);
+  if (!rows.length) return { status: 404, message: 'Record not found' };
+
+  const recordBarangay = String(rows[0].barangay || '').trim();
+  if (recordBarangay && recordBarangay !== user.barangay) {
+    return { status: 403, message: 'You can only manage records in your barangay' };
+  }
+
+  return null;
 };
 
 const announcementSelect = `SELECT id, title, content, poster_image AS posterImage, audience, barangay, category, priority, pinned, status,
@@ -137,7 +157,16 @@ const tableMap = {
   offices: {
     table: 'offices',
     realtime: 'offices:changed',
-    list: `SELECT id, name, barangay, description, status, created_at AS createdAt FROM offices ORDER BY barangay ASC, name ASC`,
+    list: ({ user }) => {
+      const scoped = managesSingleBarangay(user);
+      return {
+        sql: `SELECT id, name, barangay, description, status, created_at AS createdAt
+              FROM offices
+              ${scoped ? 'WHERE barangay = ?' : ''}
+              ORDER BY barangay ASC, name ASC`,
+        values: scoped ? [user.barangay || ''] : []
+      };
+    },
     insert: {
       sql: `INSERT INTO offices (name, barangay, description, status) VALUES (?, ?, ?, ?)`,
       values: (body) => [body.name, body.barangay, body.description || '', body.status || 'Active']
@@ -183,9 +212,7 @@ const tableMap = {
       if (user?.accountType === 'resident') {
         filters.push('sr.resident_id = ?');
         values.push(user.id);
-      }
-
-      if (user?.role === 'barangay_staff') {
+      } else if (managesSingleBarangay(user)) {
         filters.push('ra.barangay = ?');
         values.push(user.barangay || '');
       }
@@ -225,6 +252,12 @@ const tableMap = {
       const filters = [];
       const values = [];
       const currentBarangay = await getCurrentUserBarangay(user);
+      const scoped = managesSingleBarangay(user);
+
+      if (scoped) {
+        filters.push(`(barangay IS NULL OR barangay = '' OR ${barangayMatchSql('barangay')})`);
+        values.push(currentBarangay || user?.barangay || '');
+      }
 
       if (!user?.permissions?.includes('announcements:write')) {
         filters.push("status = 'Published'");
@@ -373,6 +406,14 @@ export const createModule = (moduleName) => async (req, res, next) => {
       }
     }
 
+    if (managesSingleBarangay(req.user) && (moduleName === 'offices' || moduleName === 'announcements')) {
+      req.body.barangay = req.user.barangay;
+    } else if (moduleName === 'offices') {
+      req.body.barangay = await assertKnownBarangay(req.body.barangay);
+    } else if (moduleName === 'announcements' && req.body.barangay) {
+      req.body.barangay = await assertKnownBarangay(req.body.barangay);
+    }
+
     const [result] = await pool.execute(config.insert.sql, config.insert.values(req.body, req.user));
     const createdRecord = { id: result.insertId, ...req.body };
 
@@ -423,6 +464,17 @@ export const updateModule = (moduleName) => async (req, res, next) => {
 
     if (!config.update) {
       return res.status(405).json({ message: 'This module does not support updates' });
+    }
+
+    const scopeError = await assertOwnBarangayRecord(moduleName, req.user, req.params.id);
+    if (scopeError) return res.status(scopeError.status).json({ message: scopeError.message });
+
+    if (managesSingleBarangay(req.user) && (moduleName === 'offices' || moduleName === 'announcements')) {
+      req.body.barangay = req.user.barangay;
+    } else if (moduleName === 'offices') {
+      req.body.barangay = await assertKnownBarangay(req.body.barangay);
+    } else if (moduleName === 'announcements' && req.body.barangay) {
+      req.body.barangay = await assertKnownBarangay(req.body.barangay);
     }
 
     const [result] = await pool.execute(config.update.sql, config.update.values(req.body, req.params.id, req.user));
@@ -487,7 +539,7 @@ export const updateRequestStatus = async (req, res, next) => {
       return res.status(400).json({ message: 'Only ready-to-claim requests can be marked as claimed' });
     }
 
-    if (req.user?.role === 'barangay_staff') {
+    if (managesSingleBarangay(req.user)) {
       const sameBarangay = currentRequest.barangay === req.user.barangay;
       if (!sameBarangay) {
         return res.status(403).json({ message: 'You do not have permission to update this request' });
@@ -535,8 +587,9 @@ export const updateRequestDetails = async (req, res, next) => {
     let { title } = req.body;
 
     const [currentRows] = await pool.execute(
-      `SELECT sr.id, sr.resident_id AS residentId, sr.status, dt.name AS documentTypeName
+      `SELECT sr.id, sr.resident_id AS residentId, sr.status, ra.barangay, dt.name AS documentTypeName
        FROM service_requests sr
+       LEFT JOIN resident_accounts ra ON ra.id = sr.resident_id
        LEFT JOIN document_types dt ON dt.id = sr.document_type_id
        WHERE sr.id = ?`,
       [req.params.id]
@@ -564,6 +617,8 @@ export const updateRequestDetails = async (req, res, next) => {
       if (currentRequest.status !== 'Submitted') {
         return res.status(400).json({ message: 'Only submitted requests can be edited' });
       }
+    } else if (managesSingleBarangay(req.user) && currentRequest.barangay !== req.user.barangay) {
+      return res.status(403).json({ message: 'You do not have permission to update this request' });
     }
 
     await pool.execute(
@@ -673,6 +728,9 @@ export const markAllNotificationsRead = async (req, res, next) => {
 // Deletes an announcement by id and notifies connected clients.
 export const deleteAnnouncement = async (req, res, next) => {
   try {
+    const scopeError = await assertOwnBarangayRecord('announcements', req.user, req.params.id);
+    if (scopeError) return res.status(scopeError.status).json({ message: scopeError.message });
+
     const [result] = await pool.execute('DELETE FROM announcements WHERE id = ?', [req.params.id]);
     if (result.affectedRows === 0) return res.status(404).json({ message: 'Announcement not found' });
 
@@ -706,6 +764,14 @@ export const getAnnouncementPoster = async (req, res, next) => {
     }
 
     const announcement = rows[0];
+    if (managesSingleBarangay(req.user)) {
+      const announcementBarangay = normalizeBarangayName(announcement.barangay);
+      const userBarangay = normalizeBarangayName(req.user.barangay);
+      if (announcementBarangay && announcementBarangay !== userBarangay) {
+        return res.status(403).json({ message: 'You do not have permission to view this announcement poster' });
+      }
+    }
+
     if (!req.user?.permissions?.includes('announcements:write')) {
       const isPublished = announcement.status === 'Published';
       const isExpired = announcement.expiresAt && new Date(announcement.expiresAt) < new Date();
@@ -734,11 +800,14 @@ export const getAnnouncementPoster = async (req, res, next) => {
 // Lists staff accounts with normalized permissions for the admin UI.
 export const listStaff = async (req, res, next) => {
   try {
-    const [rows] = await pool.query(
+    const scoped = managesSingleBarangay(req.user);
+    const [rows] = await pool.execute(
       `SELECT sa.id, sa.name, sa.email, sa.barangay, sa.office_id AS officeId, o.name AS officeName, sa.role, sa.permissions, sa.status, sa.created_at AS createdAt
        FROM staff_accounts sa
        LEFT JOIN offices o ON o.id = sa.office_id
-       ORDER BY sa.created_at DESC`
+       ${scoped ? 'WHERE sa.barangay = ?' : ''}
+       ORDER BY sa.created_at DESC`,
+      scoped ? [req.user.barangay || ''] : []
     );
     return res.json({
       data: rows.map((staff) => ({
@@ -752,32 +821,65 @@ export const listStaff = async (req, res, next) => {
   }
 };
 
+const normalizeStaffInput = async (body, user) => {
+  const name = assertPersonName(body.name, 'Name', { maxLength: 160 });
+  const email = assertEmail(body.email);
+  const role = body.role || 'barangay_staff';
+  const status = body.status || 'Active';
+  let barangay = body.barangay ?? null;
+
+  if (managesSingleBarangay(user)) {
+    barangay = user.barangay;
+  } else if (barangay) {
+    barangay = await assertKnownBarangay(barangay);
+  } else {
+    barangay = null;
+  }
+
+  return {
+    name,
+    email,
+    barangay,
+    officeId: body.officeId || null,
+    role,
+    status,
+    permissions: normalizePermissions(body.permissions, role)
+  };
+};
+
 // Creates a staff account (or upserts by email) with hashed password and permissions.
 export const createStaff = async (req, res, next) => {
   try {
-    const { name, email, barangay = null, officeId = null, role = 'barangay_staff', status = 'Active' } = req.body;
     const password = req.body.password === undefined || req.body.password === null ? 'Staff@123' : req.body.password;
-    const permissions = normalizePermissions(req.body.permissions, role);
-
-    if (!name || !email) {
-      return res.status(400).json({ message: 'Name and email are required' });
-    }
 
     if (req.body.password && !isValidAccountPassword(password)) {
       return res.status(400).json({ message: PASSWORD_POLICY_MESSAGE });
+    }
+
+    const staff = await normalizeStaffInput(req.body, req.user);
+    const [existingEmail] = await pool.execute(
+      'SELECT id, barangay FROM staff_accounts WHERE email = ?',
+      [staff.email]
+    );
+    if (
+      existingEmail.length &&
+      managesSingleBarangay(req.user) &&
+      existingEmail[0].barangay !== req.user.barangay
+    ) {
+      return res.status(409).json({ message: 'A staff account already exists for this email' });
     }
 
     const [result] = await pool.execute(
       `INSERT INTO staff_accounts (name, email, barangay, office_id, password_hash, role, permissions, status)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE name = VALUES(name), barangay = VALUES(barangay), office_id = VALUES(office_id), role = VALUES(role), permissions = VALUES(permissions), status = VALUES(status)`,
-      [name, email, barangay, officeId, hashPassword(password), role, JSON.stringify(permissions), status]
+      [staff.name, staff.email, staff.barangay, staff.officeId, hashPassword(password), staff.role, JSON.stringify(staff.permissions), staff.status]
     );
 
-    await logAudit({ user: req.user, action: 'staff.create', entityType: 'staff_accounts', entityId: result.insertId, details: { name, email, role, permissions } });
+    await logAudit({ user: req.user, action: 'staff.create', entityType: 'staff_accounts', entityId: result.insertId, details: { name: staff.name, email: staff.email, role: staff.role, permissions: staff.permissions } });
     emitRealtimeEvent('staff:changed', { action: 'created', id: result.insertId });
 
-    return res.status(201).json({ data: { id: result.insertId, name, email, barangay, officeId, role, permissions, status } });
+    return res.status(201).json({ data: { id: result.insertId, ...staff } });
   } catch (error) {
     if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'A staff account already exists for this email' });
     return next(error);
@@ -787,21 +889,21 @@ export const createStaff = async (req, res, next) => {
 // Updates staff profile, role, permissions, and optional password.
 export const updateStaff = async (req, res, next) => {
   try {
-    const { name, email, barangay = null, officeId = null, role = 'barangay_staff', password = '', status = 'Active' } = req.body;
-    const permissions = normalizePermissions(req.body.permissions, role);
-
-    if (!name || !email) {
-      return res.status(400).json({ message: 'Name and email are required' });
-    }
+    const password = req.body.password || '';
 
     if (password && !isValidAccountPassword(password)) {
       return res.status(400).json({ message: PASSWORD_POLICY_MESSAGE });
     }
 
-    const [existingRows] = await pool.execute('SELECT id FROM staff_accounts WHERE id = ?', [req.params.id]);
+    const [existingRows] = await pool.execute('SELECT id, barangay FROM staff_accounts WHERE id = ?', [req.params.id]);
     if (existingRows.length === 0) return res.status(404).json({ message: 'Staff account not found' });
 
-    const values = [name, email, barangay, officeId || null, role, JSON.stringify(permissions), status];
+    if (managesSingleBarangay(req.user) && existingRows[0].barangay !== req.user.barangay) {
+      return res.status(403).json({ message: 'You can only manage staff in your barangay' });
+    }
+
+    const staff = await normalizeStaffInput(req.body, req.user);
+    const values = [staff.name, staff.email, staff.barangay, staff.officeId, staff.role, JSON.stringify(staff.permissions), staff.status];
     let passwordSql = '';
 
     if (password) {
@@ -823,14 +925,66 @@ export const updateStaff = async (req, res, next) => {
       action: 'staff.update',
       entityType: 'staff_accounts',
       entityId: req.params.id,
-      details: { name, email, barangay, officeId, role, permissions, status, passwordChanged: Boolean(password) }
+      details: { ...staff, passwordChanged: Boolean(password) }
     });
     emitRealtimeEvent('staff:changed', { action: 'updated', id: req.params.id });
     emitRealtimeEvent('dashboard:changed', { reason: 'staff-updated' });
 
-    return res.json({ data: { id: req.params.id, name, email, barangay, officeId, role, permissions, status } });
+    return res.json({ data: { id: req.params.id, ...staff } });
   } catch (error) {
     if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'A staff account already exists for this email' });
+    return next(error);
+  }
+};
+
+// Deletes the signed-in admin account after that admin re-enters their password.
+export const deleteOwnAdminAccount = async (req, res, next) => {
+  try {
+    if (req.user?.role !== ROLES.ADMIN) {
+      return res.status(403).json({ message: 'Only the signed-in admin can delete their own account' });
+    }
+
+    const password = String(req.body?.password || '');
+    if (!password) {
+      return res.status(400).json({ message: 'Password is required to delete this account' });
+    }
+
+    const [rows] = await pool.execute(
+      'SELECT id, password_hash, role, barangay FROM staff_accounts WHERE id = ?',
+      [req.user.id]
+    );
+    if (!rows.length || rows[0].role !== ROLES.ADMIN) {
+      return res.status(404).json({ message: 'Admin account not found' });
+    }
+
+    if (!verifyPassword(password, rows[0].password_hash)) {
+      return res.status(400).json({ message: 'Password is incorrect' });
+    }
+
+    if (!String(rows[0].barangay || '').trim()) {
+      const [counts] = await pool.execute(
+        `SELECT COUNT(*) AS total
+         FROM staff_accounts
+         WHERE role = ? AND (barangay IS NULL OR TRIM(barangay) = '')`,
+        [ROLES.ADMIN]
+      );
+      if (Number(counts[0].total) <= 1) {
+        return res.status(400).json({ message: 'The last city-wide admin account cannot be deleted' });
+      }
+    }
+
+    await logAudit({
+      user: req.user,
+      action: 'staff.self_delete',
+      entityType: 'staff_accounts',
+      entityId: req.user.id,
+      details: { barangay: rows[0].barangay || null }
+    });
+    await pool.execute('DELETE FROM staff_accounts WHERE id = ? AND role = ?', [req.user.id, ROLES.ADMIN]);
+    emitRealtimeEvent('staff:changed', { action: 'deleted', id: req.user.id });
+
+    return res.json({ message: 'Account deleted' });
+  } catch (error) {
     return next(error);
   }
 };

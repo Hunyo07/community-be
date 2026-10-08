@@ -3,6 +3,7 @@ import {
   createModule,
   createStaff,
   deleteAnnouncement,
+  deleteOwnAdminAccount,
   getAnnouncementPoster,
   getNotificationSummary,
   listModule,
@@ -56,6 +57,7 @@ requestRoutes.patch('/:id/status', authorizePermissions(PERMISSIONS.REQUESTS_WRI
 export const staffRoutes = Router();
 staffRoutes.get('/', listStaff);
 staffRoutes.post('/', authorizePermissions(PERMISSIONS.STAFF_WRITE), createStaff);
+staffRoutes.delete('/me', authorizePermissions(PERMISSIONS.STAFF_WRITE), deleteOwnAdminAccount);
 staffRoutes.patch('/:id', authorizePermissions(PERMISSIONS.STAFF_WRITE), updateStaff);
 
 // Community announcements, including poster image upload and delete.

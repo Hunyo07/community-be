@@ -1,6 +1,7 @@
 import { pool } from "../config/db.js";
 import { emitRealtimeEvent } from "../realtime/socket.js";
 import { logAudit } from "../utils/auditLogger.js";
+import { isBarangayAdmin } from "../utils/barangayScope.js";
 import { getSettingValue } from "../utils/settings.js";
 import { formatResidentName } from "../utils/residentName.js";
 
@@ -143,9 +144,21 @@ const getServiceById = async (id) => {
   return rows[0] ? mapService(rows[0]) : null;
 };
 
-// Blocks barangay staff from managing services outside their barangay/office scope.
+// Blocks barangay staff and barangay admins from managing services outside their barangay.
 const assertServiceAccess = (req, service) => {
-  if (!service || req.user?.role !== "barangay_staff") return null;
+  if (!service) return null;
+
+  if (isBarangayAdmin(req.user)) {
+    if (service.barangay !== req.user.barangay) {
+      return Object.assign(
+        new Error("You do not have permission to manage this service"),
+        { statusCode: 403 },
+      );
+    }
+    return null;
+  }
+
+  if (req.user?.role !== "barangay_staff") return null;
 
   const sameBarangay = service.barangay === req.user.barangay;
   const sameOffice =
@@ -166,6 +179,16 @@ const assertServiceAccess = (req, service) => {
 
 // Checks write payloads so barangay staff cannot assign services outside their scope.
 const assertWritableServiceScope = (req, payload) => {
+  if (isBarangayAdmin(req.user)) {
+    if (payload.barangay !== req.user.barangay) {
+      return Object.assign(
+        new Error("You can only manage services in your assigned barangay"),
+        { statusCode: 403 },
+      );
+    }
+    return null;
+  }
+
   if (req.user?.role !== "barangay_staff") return null;
 
   const sameBarangay = payload.barangay === req.user.barangay;
@@ -242,7 +265,10 @@ const getScopedServices = async (req) => {
   const filters = [];
   const values = [];
 
-  if (req.user?.role === "barangay_staff") {
+  if (isBarangayAdmin(req.user)) {
+    filters.push("services.barangay = ?");
+    values.push(req.user.barangay || "");
+  } else if (req.user?.role === "barangay_staff") {
     if (!req.user.permissions?.includes("services:view_all_barangays")) {
       filters.push("services.barangay = ?");
       values.push(req.user.barangay || "");
@@ -465,7 +491,9 @@ export const createService = async (req, res, next) => {
       {
         visibility: defaultVisibility,
         barangay:
-          req.user?.role === "barangay_staff" ? req.user.barangay : undefined,
+          req.user?.role === "barangay_staff" || isBarangayAdmin(req.user)
+            ? req.user.barangay
+            : undefined,
       },
     );
     payload = await applyStaffOfficeScope(req, payload);
@@ -543,7 +571,9 @@ export const updateService = async (req, res, next) => {
 
     let payload = await normalizeServicePayload(req.body, existing, {
       barangay:
-        req.user?.role === "barangay_staff" ? req.user.barangay : undefined,
+        req.user?.role === "barangay_staff" || isBarangayAdmin(req.user)
+          ? req.user.barangay
+          : undefined,
     });
     payload = await applyStaffOfficeScope(req, payload);
     const scopeError = assertWritableServiceScope(req, payload);

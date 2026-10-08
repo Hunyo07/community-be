@@ -125,6 +125,24 @@ describe('errorHandler: details', () => {
   });
 });
 
+describe('errorHandler: database faults', () => {
+  it('turns a duplicate key into a conflict message', () => {
+    const res = createRes();
+    const error = Object.assign(new Error('Duplicate entry'), { code: 'ER_DUP_ENTRY' });
+    errorHandler(error, {}, res, vi.fn());
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(res.json).toHaveBeenCalledWith({ message: 'A record with this value already exists.' });
+  });
+
+  it('turns a value that is too long into a field message', () => {
+    const res = createRes();
+    const error = Object.assign(new Error('Data too long'), { code: 'ER_DATA_TOO_LONG' });
+    errorHandler(error, {}, res, vi.fn());
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith({ message: 'One of the values is too long for its field.' });
+  });
+});
+
 describe('errorHandler: behavior', () => {
   it('sends exactly one response', () => {
     const res = createRes();

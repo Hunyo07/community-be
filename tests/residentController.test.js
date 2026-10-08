@@ -137,9 +137,16 @@ const setupDb = (overrides = {}) => {
     ...overrides,
   };
 
-  pool.execute.mockImplementation(async (sql) => {
+  pool.execute.mockImplementation(async (sql, params = []) => {
     if (sql.includes('selfie_id_image FROM resident_accounts')) {
       return [state.selfie ? [state.selfie] : []];
+    }
+    if (sql.includes('FROM barangays')) {
+      if (state.barangayFound === false) return [[]];
+      return [[{ id: 1, name: params[0] || 'Balanti' }]];
+    }
+    if (sql.includes('FROM barangays')) {
+      return [state.barangayFound === false ? [] : [{ id: 1, name: 'Balanti' }]];
     }
     if (sql.includes('INSERT INTO resident_accounts')) {
       if (state.insertError) throw state.insertError;
@@ -198,6 +205,13 @@ describe('getResidents: who sees which residents', () => {
 
         expect(listCall()[0]).not.toContain('WHERE ra.barangay');
     expect(listCall()[1]).toEqual([]);
+  });
+
+  it('limits an admin to their assigned barangay', async () => {
+    await run(getResidents, { user: { ...admin, barangay: 'Atioc' } });
+
+    expect(listCall()[0]).toContain('WHERE ra.barangay = ?');
+    expect(listCall()[1]).toEqual(['Atioc']);
   });
 
   it('limits staff to their own barangay', async () => {
@@ -591,6 +605,18 @@ describe('createResident: validation (BB-05, BB-06)', () => {
     },
   );
 
+  it('rejects a first name that contains a special character', async () => {
+    await expectRejected(
+      { ...validBody, firstName: 'Juan@' },
+      'First name can only contain letters, spaces, hyphens, apostrophes, and periods.',
+    );
+  });
+
+  it('rejects an unrecognized barangay', async () => {
+    setupDb({ barangayFound: false });
+    await expectRejected(validBody, 'Barangay is not recognized.');
+  });
+
   it('rejects an empty body', async () => {
     await expectRejected({}, required);
   });
@@ -695,6 +721,11 @@ describe('createResident: barangay staff scope', () => {
   it('lets an admin choose any barangay', async () => {
     await run(createResident, { user: admin, body });
     expect(callFor('INSERT INTO resident_accounts')[1][5]).toBe('Other Barangay');
+  });
+
+  it('forces a barangay admin to create residents in their own barangay', async () => {
+    await run(createResident, { user: { ...admin, barangay: 'Atioc' }, body });
+    expect(callFor('INSERT INTO resident_accounts')[1][5]).toBe('Atioc');
   });
 
   it('lets staff with view-all choose any barangay', async () => {

@@ -1,15 +1,11 @@
 import { pool } from "../config/db.js";
 import { PERMISSIONS, ROLES } from "../rbac/roles.js";
+import { isBarangayAdmin, isOperationallyScoped } from "../utils/barangayScope.js";
 import { formatResidentName } from "../utils/residentName.js";
 
 // This controller builds the data shown on the dashboard.
 // It gathers resident, request, and service statistics from the database.
 const numberFormat = new Intl.NumberFormat("en-US");
-
-// Returns true when the user may see residents outside their own barangay.
-const canViewAllResidents = (user) =>
-  user?.role !== ROLES.BARANGAY_STAFF ||
-  user.permissions?.includes(PERMISSIONS.RESIDENTS_VIEW_ALL);
 
 // Builds role-specific dashboard metrics and lists for residents or staff/admins.
 export const getDashboard = async (req, res, next) => {
@@ -145,7 +141,11 @@ export const getDashboard = async (req, res, next) => {
       });
     }
 
-    const scopedToBarangay = !canViewAllResidents(req.user);
+    const scopedToBarangay = isOperationallyScoped(req.user);
+    const servicesScoped =
+      isBarangayAdmin(req.user) ||
+      (req.user?.role === ROLES.BARANGAY_STAFF &&
+        !req.user.permissions?.includes(PERMISSIONS.SERVICES_VIEW_ALL_BARANGAYS));
     const residentWhere = scopedToBarangay ? "WHERE barangay = ?" : "";
     const residentValues = scopedToBarangay ? [req.user.barangay || ""] : [];
     const requestWhere = scopedToBarangay ? "WHERE ra.barangay = ?" : "";
@@ -164,13 +164,17 @@ export const getDashboard = async (req, res, next) => {
        ${residentWhere}`,
       residentValues,
     );
-    const [[serviceCounts]] = await pool.query(
+    const serviceWhere = servicesScoped ? "WHERE barangay = ?" : "";
+    const serviceValues = servicesScoped ? [req.user.barangay || ""] : [];
+    const [[serviceCounts]] = await pool.execute(
       `SELECT
         COUNT(*) AS totalServices,
         SUM(status = 'Active') AS activeServices,
         COALESCE(SUM(beneficiaries), 0) AS totalBeneficiaries,
         COALESCE(SUM(pending_requests), 0) AS pendingRequests
-       FROM services`,
+       FROM services
+       ${serviceWhere}`,
+      serviceValues,
     );
     const [recentResidents] = await pool.execute(
       `SELECT first_name, middle_name, last_name, barangay, status, created_at
@@ -209,12 +213,14 @@ export const getDashboard = async (req, res, next) => {
        LIMIT 5`,
       residentValues,
     );
-    const [serviceUtilizationRows] = await pool.query(
+    const [serviceUtilizationRows] = await pool.execute(
       `SELECT category, COALESCE(SUM(beneficiaries), 0) AS beneficiaries
        FROM services
+       ${serviceWhere}
        GROUP BY category
        ORDER BY beneficiaries DESC
        LIMIT 5`,
+      serviceValues,
     );
     const [barangayRows] = await pool.execute(
       `SELECT barangay, COUNT(*) AS residents, SUM(verification_status = 'Verified') AS verified

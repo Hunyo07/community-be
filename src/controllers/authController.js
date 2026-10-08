@@ -8,13 +8,12 @@ import { emitRealtimeEvent } from '../realtime/socket.js';
 import { normalizePermissions, PERMISSIONS, ROLES } from '../rbac/roles.js';
 import { logAudit } from '../utils/auditLogger.js';
 import { calculateAge } from '../utils/age.js';
+import { assertKnownBarangay } from '../utils/knownBarangay.js';
 import { hashPassword, verifyPassword } from '../utils/password.js';
 import { PASSWORD_POLICY_MESSAGE, isValidAccountPassword } from '../utils/passwordPolicy.js';
+import { assertEmail, assertPersonName } from '../utils/personName.js';
 import { isSettingEnabled } from '../utils/settings.js';
-import {
-  formatResidentName,
-  normalizeMiddleName,
-} from '../utils/residentName.js';
+import { formatResidentName } from '../utils/residentName.js';
 import { normalizeResidentProfileFields } from '../utils/residentProfile.js';
 
 // Create a 6-digit one-time password for email verification.
@@ -55,7 +54,11 @@ const notifyResidentRegistrationReviewers = async ({ residentId, firstName, midd
       return false;
     }
 
-    if (staff.role === ROLES.ADMIN) return true;
+    if (staff.role === ROLES.ADMIN) {
+      const staffBarangay = normalizeBarangayName(staff.barangay);
+      if (!staffBarangay) return true;
+      return staffBarangay === residentBarangay;
+    }
 
     const canViewAllResidents = permissions.includes(PERMISSIONS.RESIDENTS_VIEW_ALL);
     return canViewAllResidents || normalizeBarangayName(staff.barangay) === residentBarangay;
@@ -494,8 +497,12 @@ export const registerResident = async (req, res, next) => {
       return res.status(400).json({ message: 'Selfie with ID image is required' });
     }
 
-    const { firstName, lastName, email, barangay, birthDate, password, otp } = req.body;
-    const middleName = normalizeMiddleName(req.body.middleName);
+    const firstName = assertPersonName(req.body.firstName, 'First name');
+    const middleName = assertPersonName(req.body.middleName, 'Middle name', { required: false });
+    const lastName = assertPersonName(req.body.lastName, 'Last name');
+    const email = assertEmail(req.body.email);
+    const barangay = await assertKnownBarangay(req.body.barangay);
+    const { birthDate, password, otp } = req.body;
     const profile = normalizeResidentProfileFields(req.body);
     const age = calculateAge(birthDate);
 
