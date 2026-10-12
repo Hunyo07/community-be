@@ -1149,14 +1149,20 @@ describe('notifications: who sees which ones', () => {
     expect(listCall()[1]).toEqual([12, 'resident', 'resident']);
   });
 
-  it('scopes an admin by their own id and role', async () => {
+  it('scopes an admin to their own id across staff roles, plus admin broadcasts', async () => {
     await run(listModule('notifications'), { user: admin });
-    expect(listCall()[1]).toEqual([1, 'admin', 'admin']);
+    expect(listCall()[1]).toEqual([1, 'admin', 'barangay_staff', 'staff', 'admin']);
+  });
+
+  it('lets barangay staff see alerts saved under an admin role for the same account', async () => {
+    await run(listModule('notifications'), { user: staff() });
+    expect(listCall()[0]).toContain("user_role IN (?, ?, ?)");
+    expect(listCall()[1]).toEqual([2, 'admin', 'barangay_staff', 'staff', 'barangay_staff']);
   });
 
   it('uses the account type when the user has no role', async () => {
     await run(listModule('notifications'), { user: { id: 5, accountType: 'staff' } });
-    expect(listCall()[1]).toEqual([5, 'staff', 'staff']);
+    expect(listCall()[1]).toEqual([5, 'admin', 'barangay_staff', 'staff', 'staff']);
   });
 
   it('treats a user with no id or role as a resident with id 0', async () => {
@@ -1362,7 +1368,7 @@ describe('staff accounts: creating (FR15)', () => {
     barangay: 'Balanti',
     officeId: 2,
     role: 'barangay_staff',
-    password: 'NewPass123',
+    password: 'NewPass123!',
     ...extra,
   });
   const create = (body = makeBody()) => run(createStaff, { body });
@@ -1405,12 +1411,12 @@ describe('staff accounts: creating (FR15)', () => {
   it('hashes the password before saving it', async () => {
     await create();
 
-    expect(hashPassword).toHaveBeenCalledWith('NewPass123');
+    expect(hashPassword).toHaveBeenCalledWith('NewPass123!');
     expect(insertCall()[1][4]).toBe('hashed');
   });
 
   it('fills in defaults for the optional fields', async () => {
-    await create({ name: 'Sam Staff', email: 'sam@example.com', password: 'NewPass123' });
+    await create({ name: 'Sam Staff', email: 'sam@example.com', password: 'NewPass123!' });
 
     const params = insertCall()[1];
     expect(params[2]).toBeNull();
@@ -1444,7 +1450,7 @@ describe('staff accounts: creating (FR15)', () => {
         entityId: 20,
       }),
     );
-    expect(JSON.stringify(logAudit.mock.calls[0][0])).not.toContain('NewPass123');
+    expect(JSON.stringify(logAudit.mock.calls[0][0])).not.toContain('NewPass123!');
   });
 
   it('sends a realtime event', async () => {
@@ -1469,7 +1475,7 @@ describe('staff accounts: creating (FR15)', () => {
     expect(hashPassword).not.toHaveBeenCalled();
   });
 
-  it.each(['short', 'password1', 'Password1!'])(
+  it.each(['short', 'password1', 'Password1'])(
     'rejects the weak password %s',
     async (password) => {
       const { res } = await create(makeBody({ password }));
@@ -1560,10 +1566,10 @@ describe('staff accounts: updating and deactivating (FR15, FR16)', () => {
   });
 
   it('saves a new hashed password', async () => {
-    await update(makeBody({ password: 'NewPass123' }));
+    await update(makeBody({ password: 'NewPass123!' }));
 
     const [sql, params] = updateCall();
-    expect(hashPassword).toHaveBeenCalledWith('NewPass123');
+    expect(hashPassword).toHaveBeenCalledWith('NewPass123!');
     expect(sql).toContain(', password_hash = ?');
     expect(params.slice(-2)).toEqual(['hashed', '3']);
   });
@@ -1592,7 +1598,7 @@ describe('staff accounts: updating and deactivating (FR15, FR16)', () => {
     expect(updateCall()).toBeUndefined();
   });
 
-  it.each(['short', 'password1', 'Password1!'])(
+  it.each(['short', 'password1', 'Password1'])(
     'rejects the weak password %s',
     async (password) => {
       const { res } = await update(makeBody({ password }));
@@ -1616,7 +1622,7 @@ describe('staff accounts: updating and deactivating (FR15, FR16)', () => {
   });
 
   it('records an audit entry that never contains the password', async () => {
-    await update(makeBody({ password: 'NewPass123' }));
+    await update(makeBody({ password: 'NewPass123!' }));
 
     expect(logAudit).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1626,7 +1632,7 @@ describe('staff accounts: updating and deactivating (FR15, FR16)', () => {
         details: expect.objectContaining({ passwordChanged: true }),
       }),
     );
-    expect(JSON.stringify(logAudit.mock.calls[0][0])).not.toContain('NewPass123');
+    expect(JSON.stringify(logAudit.mock.calls[0][0])).not.toContain('NewPass123!');
   });
 
   it('notes in the audit entry when the password was not changed', async () => {

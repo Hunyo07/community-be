@@ -20,10 +20,26 @@ const getNotificationAudience = (user) => ({
   userRole: user?.role || user?.accountType || 'resident'
 });
 
+const STAFF_NOTIFICATION_ROLES = [ROLES.ADMIN, ROLES.BARANGAY_STAFF, 'staff'];
+
+const isStaffNotificationAccount = (user, userRole) =>
+  user?.accountType === 'staff' || STAFF_NOTIFICATION_ROLES.includes(userRole);
+
 // SQL scope so users only see their own notifications (or broadcast ones for their role).
+// Staff and admin share one account table, so a role change still shows that person's alerts.
 const getNotificationScope = (user, tableAlias = '') => {
   const { userId, userRole } = getNotificationAudience(user);
   const prefix = tableAlias ? `${tableAlias}.` : '';
+
+  if (isStaffNotificationAccount(user, userRole)) {
+    const personalRoles = STAFF_NOTIFICATION_ROLES.map(() => '?').join(', ');
+
+    return {
+      clause: `(${prefix}user_id = ? AND ${prefix}user_role IN (${personalRoles}))
+        OR (${prefix}user_id IS NULL AND ${prefix}user_role IN (?, 'all', 'All'))`,
+      values: [userId, ...STAFF_NOTIFICATION_ROLES, userRole]
+    };
+  }
 
   return {
     clause: `(${prefix}user_id = ? AND ${prefix}user_role = ?)

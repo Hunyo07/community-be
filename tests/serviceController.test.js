@@ -1013,6 +1013,18 @@ describe('getServices: service details in the response', () => {
     expect(service.startDate).toBe('2026-03-01');
     expect(service.endDate).toBe('2026-03-31');
   });
+
+  it('keeps the year when MySQL returns a Date object', async () => {
+    const service = await firstService(
+      serviceRow({
+        start_date: new Date(2026, 4, 15),
+        end_date: new Date(2026, 5, 30),
+      }),
+    );
+
+    expect(service.startDate).toBe('2026-05-15');
+    expect(service.endDate).toBe('2026-06-30');
+  });
 });
 
 describe('getServiceDirectory', () => {

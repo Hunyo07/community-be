@@ -50,7 +50,7 @@ const notifyResidentRegistrationReviewers = async ({ residentId, firstName, midd
   const residentBarangay = normalizeBarangayName(barangay);
   const reviewers = staffRows.filter((staff) => {
     const permissions = normalizePermissions(staff.permissions, staff.role);
-    if (!permissions.includes(PERMISSIONS.RESIDENTS_READ) || !permissions.includes(PERMISSIONS.RESIDENTS_WRITE)) {
+    if (!permissions.includes(PERMISSIONS.NOTIFICATIONS_READ) || !permissions.includes(PERMISSIONS.RESIDENTS_READ)) {
       return false;
     }
 

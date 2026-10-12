@@ -480,10 +480,10 @@ describe('createResident: saving', () => {
   });
 
   it('hashes the password before saving it', async () => {
-    await create({ ...validBody, password: 'NewPass123' });
+    await create({ ...validBody, password: 'NewPass123!' });
 
     expect(hashPassword).toHaveBeenCalledTimes(1);
-    expect(hashPassword).toHaveBeenCalledWith('NewPass123');
+    expect(hashPassword).toHaveBeenCalledWith('NewPass123!');
     expect(callFor('INSERT INTO resident_accounts')[1][14]).toBe('hashed');
   });
 
@@ -514,7 +514,7 @@ describe('createResident: saving', () => {
   });
 
   it('records an audit entry without the password', async () => {
-    await create({ ...validBody, password: 'NewPass123' });
+    await create({ ...validBody, password: 'NewPass123!' });
 
     expect(logAudit).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -525,7 +525,7 @@ describe('createResident: saving', () => {
     );
     const { details } = logAudit.mock.calls[0][0];
     expect(details.password).toBe('provided');
-    expect(JSON.stringify(details)).not.toContain('NewPass123');
+    expect(JSON.stringify(details)).not.toContain('NewPass123!');
   });
 
   it('notes in the audit entry whether an ID selfie was uploaded', async () => {
@@ -696,7 +696,7 @@ describe('createResident: validation (BB-05, BB-06)', () => {
     );
   });
 
-  it.each(['short', 'password1', 'Password1!'])(
+  it.each(['short', 'password1', 'Password1'])(
     'rejects the weak password %s',
     async (password) => {
       await expectRejected({ ...validBody, password }, PASSWORD_POLICY_MESSAGE);
@@ -847,10 +847,10 @@ describe('updateResident', () => {
   });
 
   it('saves a new hashed password', async () => {
-    await run(updateResident, { params: ID, body: { password: 'NewPass123' } });
+    await run(updateResident, { params: ID, body: { password: 'NewPass123!' } });
 
     const [sql, params] = callFor('UPDATE resident_accounts');
-    expect(hashPassword).toHaveBeenCalledWith('NewPass123');
+    expect(hashPassword).toHaveBeenCalledWith('NewPass123!');
     expect(sql).toContain(', password_hash = ?');
     expect(params).toEqual([...BASE, 'hashed', '12']);
   });
@@ -870,7 +870,7 @@ describe('updateResident', () => {
   it('saves the password and the selfie together in the right order', async () => {
     await run(updateResident, {
       params: ID,
-      body: { password: 'NewPass123' },
+      body: { password: 'NewPass123!' },
       file: { path: 'uploads/new.jpg' },
     });
 
@@ -931,7 +931,7 @@ describe('updateResident', () => {
   });
 
   it('records an audit entry that never contains the password', async () => {
-    await run(updateResident, { params: ID, body: { password: 'NewPass123' } });
+    await run(updateResident, { params: ID, body: { password: 'NewPass123!' } });
 
     expect(logAudit).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -942,7 +942,7 @@ describe('updateResident', () => {
     );
     const { details } = logAudit.mock.calls[0][0];
     expect(details.password).toBe('changed');
-    expect(JSON.stringify(details)).not.toContain('NewPass123');
+    expect(JSON.stringify(details)).not.toContain('NewPass123!');
   });
 
   it('notes in the audit entry when the password was not changed', async () => {
@@ -1108,7 +1108,7 @@ describe('updateMyResidentProfile', () => {
   it('ignores a password sent in the body', async () => {
     await run(updateMyResidentProfile, {
       user: residentUser,
-      body: { password: 'NewPass123' },
+      body: { password: 'NewPass123!' },
     });
 
     expect(hashPassword).not.toHaveBeenCalled();

@@ -4,6 +4,7 @@ import { logAudit } from "../utils/auditLogger.js";
 import { isBarangayAdmin } from "../utils/barangayScope.js";
 import { getSettingValue } from "../utils/settings.js";
 import { formatResidentName } from "../utils/residentName.js";
+import { toDateOnlyString } from "../utils/age.js";
 
 // This controller handles service management on the backend.
 // It validates requests, enforces access rules, and returns service data for the frontend.
@@ -17,8 +18,8 @@ const mapService = (service) => ({
   barangay: service.barangay,
   description: service.description || "",
   targetScope: service.target_scope || "All Residents",
-  startDate: service.start_date ? String(service.start_date).slice(0, 10) : "",
-  endDate: service.end_date ? String(service.end_date).slice(0, 10) : "",
+  startDate: toDateOnlyString(service.start_date) || "",
+  endDate: toDateOnlyString(service.end_date) || "",
   remarks: service.remarks || "",
   beneficiaries: Number(service.served_count ?? service.beneficiaries ?? 0),
   officeId: service.office_id,
@@ -755,10 +756,7 @@ const getServiceSummary = async (service) => {
   };
 };
 
-const formatCsvDate = (value) => {
-  if (!value) return "";
-  return new Date(value).toISOString().slice(0, 10);
-};
+const formatCsvDate = (value) => toDateOnlyString(value) || "";
 
 const serviceSummaryColumns = [
   { key: "id", label: "Service ID" },

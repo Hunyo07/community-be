@@ -668,7 +668,7 @@ describe('logout', () => {
 
 describe('changePassword', () => {
   const staffUser = { id: 1, email: 'ana@example.com' };
-  const goodBody = { currentPassword: 'OldPass123', newPassword: 'NewPass123' };
+  const goodBody = { currentPassword: 'OldPass123', newPassword: 'NewPass123!' };
 
   const callChange = async (user, body) => {
     const res = createRes();
@@ -688,7 +688,7 @@ describe('changePassword', () => {
   });
 
   it('rejects a new password that breaks the policy', async () => {
-    for (const newPassword of ['short', 'password1', 'Password1!']) {
+    for (const newPassword of ['short', 'password1', 'Password1']) {
       const { res } = await callChange(staffUser, {
         currentPassword: 'OldPass123',
         newPassword,
@@ -753,7 +753,7 @@ describe('changePassword', () => {
 
     await callChange(staffUser, goodBody);
 
-    expect(hashPassword).toHaveBeenCalledWith('NewPass123');
+    expect(hashPassword).toHaveBeenCalledWith('NewPass123!');
     const [sql, params] = pool.execute.mock.calls[1];
     expect(sql).toContain('UPDATE staff_accounts');
     expect(params).toEqual(['new-hash', 1]);
