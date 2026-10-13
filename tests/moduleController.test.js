@@ -117,6 +117,7 @@ const detailsRow = (overrides = {}) => ({
   residentId: 12,
   status: 'Submitted',
   documentTypeName: 'Barangay Clearance',
+  barangay: 'Balanti',
   ...overrides,
 });
 
@@ -137,7 +138,11 @@ const setupDb = (overrides = {}) => {
     docType: { id: 3, name: 'Barangay Clearance', status: 'Active' },
     statusRequest: requestRow(),
     detailsRequest: detailsRow(),
-    staffRow: { id: 3 },
+    staffRow: { id: 3, barangay: 'Balanti' },
+    existingEmail: [],
+    knownBarangays: ['Balanti', 'Anao'],
+    recordBarangay: 'Balanti',
+    recordExists: true,
     poster: null,
     userBarangay: null,
     residents: [],
@@ -150,7 +155,7 @@ const setupDb = (overrides = {}) => {
     ...overrides,
   };
 
-  pool.execute.mockImplementation(async (rawSql) => {
+  pool.execute.mockImplementation(async (rawSql, params) => {
     const sql = rawSql.trim();
 
     if (sql.includes('FROM document_types WHERE id = ?')) {
@@ -171,8 +176,22 @@ const setupDb = (overrides = {}) => {
     if (sql.startsWith('SELECT id FROM resident_accounts WHERE')) {
       return [state.residents];
     }
-    if (sql.startsWith('SELECT id FROM staff_accounts WHERE id = ?')) {
+    if (sql.startsWith('SELECT id, barangay FROM staff_accounts WHERE id = ?')) {
       return [state.staffRow ? [state.staffRow] : []];
+    }
+    if (sql.startsWith('SELECT id, barangay FROM staff_accounts WHERE email = ?')) {
+      return [state.existingEmail];
+    }
+    if (sql.includes('FROM barangays WHERE LOWER(TRIM(name))')) {
+      const wanted = String(params?.[0] ?? '').trim().toLowerCase();
+      const found = state.knownBarangays.find((name) => name.toLowerCase() === wanted);
+      return [found ? [{ id: 1, name: found }] : []];
+    }
+    if (
+      sql.startsWith('SELECT barangay FROM offices WHERE id = ?') ||
+      sql.startsWith('SELECT barangay FROM announcements WHERE id = ?')
+    ) {
+      return [state.recordExists ? [{ barangay: state.recordBarangay }] : []];
     }
     if (sql.startsWith('SELECT id, title, poster_image')) {
       return [state.poster ? [state.poster] : []];
@@ -896,6 +915,57 @@ describe('document requests: editing details', () => {
 // SHARED MODULES: BARANGAYS, OFFICES, CATEGORIES, DOCUMENT TYPES
 // =====================================================
 
+describe('document requests: editing details and the barangay scope', () => {
+  const edit = (user, rows = {}) => {
+    setupDb({ detailsRequest: detailsRow(rows) });
+    return run(updateRequestDetails, {
+      user,
+      params: { id: '20' },
+      body: { title: 'Barangay Clearance', description: 'Updated' },
+    });
+  };
+  const updateCall = () => callFor('UPDATE service_requests');
+
+  it('lets staff edit a request from a resident of their own barangay', async () => {
+    const { res } = await edit(staff());
+
+    expect(res.status).not.toHaveBeenCalled();
+    expect(updateCall()[1]).toEqual(['Barangay Clearance', 'Updated', '20']);
+  });
+
+  it('stops staff from editing a request of another barangay (403)', async () => {
+    const { res } = await edit(staff(), { barangay: 'Anao' });
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith({
+      message: 'You do not have permission to update this request',
+    });
+    expect(updateCall()).toBeUndefined();
+    expect(logAudit).not.toHaveBeenCalled();
+  });
+
+  it('stops a barangay admin from editing a request of another barangay', async () => {
+    const { res } = await edit({ ...admin, barangay: 'Anao' });
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(updateCall()).toBeUndefined();
+  });
+
+  it('stops staff when the request has no resident barangay on record', async () => {
+    const { res } = await edit(staff(), { barangay: null });
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(updateCall()).toBeUndefined();
+  });
+
+  it('lets a city-wide admin edit a request from any barangay', async () => {
+    const { res } = await edit(admin, { barangay: 'Anao' });
+
+    expect(res.status).not.toHaveBeenCalled();
+    expect(updateCall()).toBeDefined();
+  });
+});
+
 describe('shared modules: listing', () => {
   it.each([
     ['barangays', 'FROM barangays'],
@@ -996,6 +1066,76 @@ describe('shared modules: creating', () => {
     },
   );
 
+  describe('offices and the barangay scope', () => {
+    const body = () => ({ name: 'Health Office', barangay: 'Anao' });
+    const createOffice = (user, data = body()) =>
+      run(createModule('offices'), { user, body: data });
+    const insertCall = () => callFor('INSERT INTO offices');
+
+    it('forces staff to create offices in their own barangay', async () => {
+      await createOffice(staff());
+      expect(insertCall()[1][1]).toBe('Balanti');
+    });
+
+    it('forces a barangay admin to create offices in their own barangay', async () => {
+      await createOffice({ ...admin, barangay: 'Anao' }, { ...body(), barangay: 'Balanti' });
+      expect(insertCall()[1][1]).toBe('Anao');
+    });
+
+    it('lets a city-wide admin pick any known barangay', async () => {
+      await createOffice(admin);
+      expect(insertCall()[1][1]).toBe('Anao');
+    });
+
+    it('rejects a barangay that is not recognized', async () => {
+      const { res, next } = await createOffice(admin, { ...body(), barangay: 'Nowhere' });
+
+      expect(next.mock.calls[0][0].message).toBe('Barangay is not recognized.');
+      expect(next.mock.calls[0][0].statusCode).toBe(400);
+      expect(res.status).not.toHaveBeenCalled();
+      expect(insertCall()).toBeUndefined();
+      expect(logAudit).not.toHaveBeenCalled();
+    });
+
+    it.each([undefined, '', '   '])('requires a barangay (%j)', async (barangay) => {
+      const { next } = await createOffice(admin, { ...body(), barangay });
+
+      expect(next.mock.calls[0][0].message).toBe('Barangay is required');
+      expect(insertCall()).toBeUndefined();
+    });
+
+    it('rejects a barangay name longer than 120 characters', async () => {
+      const { next } = await createOffice(admin, { ...body(), barangay: 'A'.repeat(121) });
+
+      expect(next.mock.calls[0][0].message).toBe('Barangay must be 120 characters or fewer.');
+      expect(insertCall()).toBeUndefined();
+    });
+
+    it('looks the barangay up with a safe query', async () => {
+      await createOffice(admin, { ...body(), barangay: "x'; DROP TABLE barangays;--" });
+
+      const [sql, params] = callFor('FROM barangays WHERE');
+      expect(sql).not.toContain('DROP TABLE');
+      expect(params).toEqual(["x'; DROP TABLE barangays;--"]);
+    });
+
+    it('lists only the offices of their own barangay for staff', async () => {
+      await run(listModule('offices'), { user: staff() });
+
+      const [sql, params] = callFor('FROM offices');
+      expect(sql).toContain('WHERE barangay = ?');
+      expect(params).toEqual(['Balanti']);
+    });
+
+    it('lists every office for a city-wide admin', async () => {
+      await run(listModule('offices'));
+
+      const [sql, params] = callFor('FROM offices');
+      expect(sql).not.toContain('WHERE barangay = ?');
+      expect(params).toEqual([]);
+    });
+  });
+
   it('fills in empty defaults for optional fields', async () => {
     await run(createModule('barangays'), { body: { name: 'Balanti' } });
     expect(callFor('INSERT INTO barangays')[1]).toEqual(['Balanti', '', '', 'Active']);
@@ -1070,6 +1210,59 @@ describe('shared modules: updating', () => {
       'Inactive',
       '7',
     ]);
+  });
+
+  describe('offices and the barangay scope', () => {
+    const officeBody = () => ({ name: 'Health Office', barangay: 'Anao', status: 'Active' });
+    const updateOffice = (user, body = officeBody()) =>
+      run(updateModule('offices'), { user, params: ID, body });
+
+    it('keeps staff inside their own barangay when they edit an office', async () => {
+      await updateOffice(staff());
+      expect(callFor('UPDATE offices')[1][1]).toBe('Balanti');
+    });
+
+    it('stops staff from editing an office of another barangay (403)', async () => {
+      setupDb({ recordBarangay: 'Anao' });
+
+      const { res } = await updateOffice(staff());
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(res.json).toHaveBeenCalledWith({
+        message: 'You can only manage records in your barangay',
+      });
+      expect(callFor('UPDATE offices')).toBeUndefined();
+    });
+
+    it('returns 404 when staff edit an office that does not exist', async () => {
+      setupDb({ recordExists: false });
+
+      const { res } = await updateOffice(staff());
+
+      expect(res.status).toHaveBeenCalledWith(404);
+      expect(callFor('UPDATE offices')).toBeUndefined();
+    });
+
+    it('rejects an unknown barangay from a city-wide admin', async () => {
+      const { next } = await updateOffice(admin, { ...officeBody(), barangay: 'Nowhere' });
+
+      expect(next.mock.calls[0][0].message).toBe('Barangay is not recognized.');
+      expect(callFor('UPDATE offices')).toBeUndefined();
+    });
+
+    it('requires a barangay when a city-wide admin saves an office', async () => {
+      const { next } = await updateOffice(admin, { ...officeBody(), barangay: '' });
+
+      expect(next.mock.calls[0][0].message).toBe('Barangay is required');
+      expect(next.mock.calls[0][0].statusCode).toBe(400);
+    });
+
+    it('does not check the barangay for other modules', async () => {
+      await run(updateModule('barangays'), { user: staff(), params: ID, body: { name: 'Balanti' } });
+
+      expect(callFor('SELECT barangay FROM offices')).toBeUndefined();
+      expect(callFor('SELECT barangay FROM announcements')).toBeUndefined();
+    });
   });
 
   it('returns 404 when no record was updated', async () => {
@@ -1348,16 +1541,41 @@ describe('staff accounts: listing', () => {
 
     await run(listStaff);
 
-    expect(pool.query.mock.calls[0][0]).not.toContain('password');
+    expect(callFor('FROM staff_accounts sa')[0]).not.toContain('password');
   });
 
   it('passes database errors to next', async () => {
-    pool.query.mockRejectedValue(new Error('Database is down'));
+    pool.execute.mockRejectedValue(new Error('Database is down'));
 
     const { res, next } = await run(listStaff);
 
     expect(next.mock.calls[0][0].message).toBe('Database is down');
     expect(res.json).not.toHaveBeenCalled();
+  });
+});
+
+describe('staff accounts: listing by barangay', () => {
+  const listCall = () => callFor('FROM staff_accounts sa');
+
+  it('shows a city-wide admin the staff of every barangay', async () => {
+    await run(listStaff);
+
+    expect(listCall()[0]).not.toContain('WHERE sa.barangay = ?');
+    expect(listCall()[1]).toEqual([]);
+  });
+
+  it('shows barangay staff only the staff of their own barangay', async () => {
+    await run(listStaff, { user: staff() });
+
+    expect(listCall()[0]).toContain('WHERE sa.barangay = ?');
+    expect(listCall()[1]).toEqual(['Balanti']);
+  });
+
+  it('shows a barangay admin only the staff of their own barangay', async () => {
+    await run(listStaff, { user: { ...admin, barangay: 'Anao' } });
+
+    expect(listCall()[0]).toContain('WHERE sa.barangay = ?');
+    expect(listCall()[1]).toEqual(['Anao']);
   });
 });
 
@@ -1371,7 +1589,7 @@ describe('staff accounts: creating (FR15)', () => {
     password: 'NewPass123!',
     ...extra,
   });
-  const create = (body = makeBody()) => run(createStaff, { body });
+  const create = (body = makeBody(), req = {}) => run(createStaff, { body, ...req });
   const insertCall = () => callFor('INSERT INTO staff_accounts');
 
   it('creates the account and responds with 201', async () => {
@@ -1463,16 +1681,110 @@ describe('staff accounts: creating (FR15)', () => {
   });
 
   it.each([
-    [{ name: '', email: 'sam@example.com' }],
-    [{ name: 'Sam', email: '' }],
-    [{ name: undefined, email: undefined }],
-  ])('requires a name and an email (%j)', async (fields) => {
-    const { res } = await create(makeBody(fields));
+    [{ name: '', email: 'sam@example.com' }, 'Name is required'],
+    [{ name: 'Sam', email: '' }, 'Email is required'],
+    [{ name: undefined, email: undefined }, 'Name is required'],
+  ])('requires a name and an email (%j)', async (fields, message) => {
+    const { res, next } = await create(makeBody(fields));
 
-    expect(res.status).toHaveBeenCalledWith(400);
-    expect(res.json).toHaveBeenCalledWith({ message: 'Name and email are required' });
-    expect(pool.execute).not.toHaveBeenCalled();
+    expect(next.mock.calls[0][0].message).toBe(message);
+    expect(next.mock.calls[0][0].statusCode).toBe(400);
+    expect(res.status).not.toHaveBeenCalled();
+    expect(insertCall()).toBeUndefined();
     expect(hashPassword).not.toHaveBeenCalled();
+  });
+
+  it.each(['Sam 123', 'Sam@Staff', '<b>Sam</b>'])(
+    'rejects the name %s because it has digits or symbols',
+    async (name) => {
+      const { next } = await create(makeBody({ name }));
+
+      expect(next.mock.calls[0][0].statusCode).toBe(400);
+      expect(next.mock.calls[0][0].message).toContain('can only contain letters');
+      expect(insertCall()).toBeUndefined();
+    },
+  );
+
+  it('accepts names with accents, hyphens, apostrophes and periods', async () => {
+    const { next } = await create(makeBody({ name: "María-José O'Neil Jr." }));
+
+    expect(next).not.toHaveBeenCalled();
+    expect(insertCall()[1][0]).toBe("María-José O'Neil Jr.");
+  });
+
+  it.each(['not-an-email', 'sam@', '@example.com', 'sam example@x.com'])(
+    'rejects the email %s',
+    async (email) => {
+      const { next } = await create(makeBody({ email }));
+
+      expect(next.mock.calls[0][0].statusCode).toBe(400);
+      expect(next.mock.calls[0][0].message).toBe('Email is not a valid email address.');
+      expect(insertCall()).toBeUndefined();
+    },
+  );
+
+  it('rejects a barangay that is not in the master list', async () => {
+    const { res, next } = await create(makeBody({ barangay: 'Nowhere' }));
+
+    expect(next.mock.calls[0][0].message).toBe('Barangay is not recognized.');
+    expect(next.mock.calls[0][0].statusCode).toBe(400);
+    expect(res.status).not.toHaveBeenCalled();
+    expect(insertCall()).toBeUndefined();
+  });
+
+  it('saves the official spelling of the barangay name', async () => {
+    await create(makeBody({ barangay: '  balanti ' }));
+    expect(insertCall()[1][2]).toBe('Balanti');
+  });
+
+  it('saves no barangay for a city-wide staff account when none is given', async () => {
+    await create(makeBody({ barangay: '' }));
+    expect(insertCall()[1][2]).toBeNull();
+  });
+
+  describe('barangay staff and barangay admins', () => {
+    it('forces the new account into their own barangay', async () => {
+      const { res } = await create(makeBody({ barangay: 'Anao' }), { user: staff() });
+
+      expect(res.status).toHaveBeenCalledWith(201);
+      expect(insertCall()[1][2]).toBe('Balanti');
+    });
+
+    it('does not check the barangay list for them', async () => {
+      await create(makeBody({ barangay: 'Nowhere' }), { user: staff() });
+
+      expect(callFor('FROM barangays WHERE')).toBeUndefined();
+      expect(insertCall()[1][2]).toBe('Balanti');
+    });
+
+    it('cannot take over an email that belongs to another barangay', async () => {
+      setupDb({ existingEmail: [{ id: 9, barangay: 'Anao' }] });
+
+      const { res } = await create(makeBody(), { user: staff() });
+
+      expect(res.status).toHaveBeenCalledWith(409);
+      expect(res.json).toHaveBeenCalledWith({
+        message: 'A staff account already exists for this email',
+      });
+      expect(insertCall()).toBeUndefined();
+      expect(logAudit).not.toHaveBeenCalled();
+    });
+
+    it('can reuse an email that already belongs to their own barangay', async () => {
+      setupDb({ existingEmail: [{ id: 9, barangay: 'Balanti' }] });
+
+      const { res } = await create(makeBody(), { user: staff() });
+
+      expect(res.status).toHaveBeenCalledWith(201);
+    });
+  });
+
+  it('looks the email up with a safe query', async () => {
+    await create();
+
+    const [sql, params] = callFor('FROM staff_accounts WHERE email = ?');
+    expect(sql).not.toContain('sam@example.com');
+    expect(params).toEqual(['sam@example.com']);
   });
 
   it.each(['short', 'password1', 'Password1'])(
@@ -1588,14 +1900,76 @@ describe('staff accounts: updating and deactivating (FR15, FR16)', () => {
   });
 
   it.each([
-    [{ name: '', email: 'sam@example.com' }],
-    [{ name: 'Sam', email: '' }],
-  ])('requires a name and an email (%j)', async (fields) => {
-    const { res } = await update(makeBody(fields));
+    [{ name: '', email: 'sam@example.com' }, 'Name is required'],
+    [{ name: 'Sam', email: '' }, 'Email is required'],
+  ])('requires a name and an email (%j)', async (fields, message) => {
+    const { res, next } = await update(makeBody(fields));
 
-    expect(res.status).toHaveBeenCalledWith(400);
-    expect(res.json).toHaveBeenCalledWith({ message: 'Name and email are required' });
+    expect(next.mock.calls[0][0].message).toBe(message);
+    expect(next.mock.calls[0][0].statusCode).toBe(400);
+    expect(res.status).not.toHaveBeenCalled();
     expect(updateCall()).toBeUndefined();
+  });
+
+  it('rejects a name with digits or symbols', async () => {
+    const { next } = await update(makeBody({ name: 'Sam 123' }));
+
+    expect(next.mock.calls[0][0].statusCode).toBe(400);
+    expect(updateCall()).toBeUndefined();
+  });
+
+  it('rejects an email that is not valid', async () => {
+    const { next } = await update(makeBody({ email: 'not-an-email' }));
+
+    expect(next.mock.calls[0][0].message).toBe('Email is not a valid email address.');
+    expect(updateCall()).toBeUndefined();
+  });
+
+  it('rejects a barangay that is not in the master list', async () => {
+    const { next } = await update(makeBody({ barangay: 'Nowhere' }));
+
+    expect(next.mock.calls[0][0].message).toBe('Barangay is not recognized.');
+    expect(updateCall()).toBeUndefined();
+  });
+
+  describe('barangay staff and barangay admins', () => {
+    it('can update staff of their own barangay and keeps them there', async () => {
+      const { res } = await update(makeBody({ barangay: 'Anao' }), { user: staff() });
+
+      expect(res.json).toHaveBeenCalled();
+      expect(updateCall()[1][2]).toBe('Balanti');
+    });
+
+    it('cannot update staff of another barangay (403)', async () => {
+      setupDb({ staffRow: { id: 3, barangay: 'Anao' } });
+
+      const { res } = await update(makeBody(), { user: staff() });
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(res.json).toHaveBeenCalledWith({
+        message: 'You can only manage staff in your barangay',
+      });
+      expect(updateCall()).toBeUndefined();
+      expect(logAudit).not.toHaveBeenCalled();
+    });
+
+    it('cannot change the password of staff in another barangay', async () => {
+      setupDb({ staffRow: { id: 3, barangay: 'Anao' } });
+
+      await update(makeBody({ password: 'NewPass123' }), { user: staff() });
+
+      expect(hashPassword).not.toHaveBeenCalled();
+      expect(updateCall()).toBeUndefined();
+    });
+
+    it('a city-wide admin can update staff of any barangay', async () => {
+      setupDb({ staffRow: { id: 3, barangay: 'Anao' } });
+
+      const { res } = await update(makeBody({ barangay: 'Anao' }));
+
+      expect(res.status).not.toHaveBeenCalledWith(403);
+      expect(updateCall()[1][2]).toBe('Anao');
+    });
   });
 
   it.each(['short', 'password1', 'Password1'])(
@@ -1701,9 +2075,28 @@ describe('announcements: who sees which ones', () => {
     expect(params).toEqual(['All', 'Residents', 'Balanti']);
   });
 
-  it('shows staff the Barangay Staff audience', async () => {
+  it('shows staff the Barangay Staff audience, limited to their own barangay', async () => {
     await run(listModule('announcements'), { user: staff() });
-    expect(listCall()[1].slice(0, 2)).toEqual(['All', 'Barangay Staff']);
+
+    expect(listCall()[0]).toContain("barangay IS NULL OR barangay = ''");
+    expect(listCall()[1]).toEqual(['Balanti', 'All', 'Barangay Staff', 'Balanti']);
+  });
+
+  it('limits staff who can write announcements to their own barangay too', async () => {
+    await run(listModule('announcements'), {
+      user: staff({ permissions: ['announcements:write'] }),
+    });
+
+    expect(listCall()[0]).not.toContain("status = 'Published'");
+    expect(listCall()[1]).toEqual(['Balanti']);
+  });
+
+  it('shows a barangay admin who can write announcements only their own barangay', async () => {
+    await run(listModule('announcements'), {
+      user: { ...writer, barangay: 'Anao' },
+    });
+
+    expect(listCall()[1]).toEqual(['Anao']);
   });
 
   it('shows admins without write access the Admins audience', async () => {
@@ -1752,7 +2145,7 @@ describe('announcements: creating', () => {
   const insertCall = () => callFor('INSERT INTO announcements');
 
   it('saves a draft with defaults and the author', async () => {
-    const { res, next } = await create();
+    const { res, next } = await create(makeBody(), { user: admin });
 
     expect(next).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(201);
@@ -1768,9 +2161,16 @@ describe('announcements: creating', () => {
       'Draft',
       null,
       null,
-      2,
-      'Sam Staff',
+      1,
+      'Ana Admin',
     ]);
+  });
+
+  it('saves the signed-in staff member as the author', async () => {
+    await create();
+
+    expect(insertCall()[1][11]).toBe(2);
+    expect(insertCall()[1][12]).toBe('Sam Staff');
   });
 
   it('sets the published date when it is published', async () => {
@@ -1791,11 +2191,55 @@ describe('announcements: creating', () => {
     expect(insertCall()[1][7]).toBe(saved);
   });
 
-  it('saves an empty barangay and an empty expiry as null', async () => {
-    await create(makeBody({ barangay: '', expiresAt: '' }));
+  it('saves an empty barangay and an empty expiry as null for a city-wide admin', async () => {
+    await create(makeBody({ barangay: '', expiresAt: '' }), { user: admin });
 
     expect(insertCall()[1][4]).toBeNull();
     expect(insertCall()[1][10]).toBeNull();
+  });
+
+  it('saves an empty expiry as null', async () => {
+    await create(makeBody({ expiresAt: '' }));
+    expect(insertCall()[1][10]).toBeNull();
+  });
+
+  describe('which barangay it is saved for', () => {
+    it('forces barangay staff to their own barangay', async () => {
+      await create(makeBody({ barangay: 'Anao' }));
+      expect(insertCall()[1][4]).toBe('Balanti');
+    });
+
+    it('forces barangay staff to their own barangay even when none is sent', async () => {
+      await create(makeBody({ barangay: '' }));
+      expect(insertCall()[1][4]).toBe('Balanti');
+    });
+
+    it('forces a barangay admin to their own barangay', async () => {
+      await create(makeBody({ barangay: 'Balanti' }), {
+        user: { ...admin, barangay: 'Anao' },
+      });
+
+      expect(insertCall()[1][4]).toBe('Anao');
+    });
+
+    it('lets a city-wide admin choose any known barangay', async () => {
+      await create(makeBody({ barangay: 'anao' }), { user: admin });
+      expect(insertCall()[1][4]).toBe('Anao');
+    });
+
+    it('rejects an unknown barangay from a city-wide admin', async () => {
+      const { res, next } = await create(makeBody({ barangay: 'Nowhere' }), { user: admin });
+
+      expect(next.mock.calls[0][0].message).toBe('Barangay is not recognized.');
+      expect(next.mock.calls[0][0].statusCode).toBe(400);
+      expect(res.status).not.toHaveBeenCalled();
+      expect(insertCall()).toBeUndefined();
+    });
+
+    it('does not check the barangay list when a city-wide admin sends no barangay', async () => {
+      await create(makeBody(), { user: admin });
+      expect(callFor('FROM barangays WHERE')).toBeUndefined();
+    });
   });
 
   it('saves the uploaded poster path', async () => {
@@ -1829,7 +2273,7 @@ describe('announcements: creating', () => {
     it('notifies every verified and active resident', async () => {
       setupDb({ residents: [{ id: 12 }, { id: 13 }] });
 
-      await create(makeBody({ status: 'Published' }));
+      await create(makeBody({ status: 'Published' }), { user: admin });
 
       const [selectSql, selectParams] = callFor('FROM resident_accounts WHERE verification_status');
       expect(selectSql).toContain("verification_status = 'Verified'");
@@ -1850,10 +2294,18 @@ describe('announcements: creating', () => {
       });
     });
 
+    it('limits staff announcements to residents of the staff barangay', async () => {
+      setupDb({ residents: [{ id: 12 }] });
+
+      await create(makeBody({ status: 'Published' }));
+
+      expect(callFor('FROM resident_accounts WHERE verification_status')[1]).toEqual(['Balanti']);
+    });
+
     it('limits notifications to one barangay when the announcement has one', async () => {
       setupDb({ residents: [{ id: 12 }] });
 
-      await create(makeBody({ status: 'Published', barangay: 'Balanti' }));
+      await create(makeBody({ status: 'Published', barangay: 'Balanti' }), { user: admin });
 
       const [selectSql, selectParams] = callFor('FROM resident_accounts WHERE verification_status');
       expect(selectSql).toContain('barangay = ?');
@@ -1863,7 +2315,7 @@ describe('announcements: creating', () => {
     it('adds "Urgent:" to the message for urgent announcements', async () => {
       setupDb({ residents: [{ id: 12 }] });
 
-      await create(makeBody({ status: 'Published', priority: 'Urgent' }));
+      await create(makeBody({ status: 'Published', priority: 'Urgent' }), { user: admin });
 
       expect(pool.query.mock.calls[0][1][0][0][3]).toBe('Urgent: Typhoon advisory');
     });
@@ -1933,7 +2385,7 @@ describe('announcements: updating', () => {
       'Stay safe',
       null,
       'All',
-      null,
+      'Balanti',
       'Advisory',
       'Normal',
       1,
@@ -1979,6 +2431,82 @@ describe('announcements: updating', () => {
     });
 
     expect(pool.query).not.toHaveBeenCalled();
+  });
+
+  describe('barangay scope', () => {
+    const updateAs = (user, body = makeBody()) =>
+      run(updateModule('announcements'), { user, params: ID, body });
+
+    it('lets staff edit an announcement of their own barangay', async () => {
+      setupDb({ recordBarangay: 'Balanti' });
+
+      const { res } = await updateAs(staff());
+
+      expect(res.status).not.toHaveBeenCalled();
+      expect(callFor('UPDATE announcements')).toBeDefined();
+    });
+
+    it('lets staff edit a city-wide announcement (no barangay)', async () => {
+      setupDb({ recordBarangay: null });
+
+      await updateAs(staff());
+
+      expect(callFor('UPDATE announcements')).toBeDefined();
+    });
+
+    it('stops staff from editing an announcement of another barangay (403)', async () => {
+      setupDb({ recordBarangay: 'Anao' });
+
+      const { res } = await updateAs(staff());
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(res.json).toHaveBeenCalledWith({
+        message: 'You can only manage records in your barangay',
+      });
+      expect(callFor('UPDATE announcements')).toBeUndefined();
+      expect(logAudit).not.toHaveBeenCalled();
+      expect(pool.query).not.toHaveBeenCalled();
+    });
+
+    it('stops a barangay admin from editing another barangay', async () => {
+      setupDb({ recordBarangay: 'Balanti' });
+
+      const { res } = await updateAs({ ...admin, barangay: 'Anao' });
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(callFor('UPDATE announcements')).toBeUndefined();
+    });
+
+    it('returns 404 when staff edit an announcement that does not exist', async () => {
+      setupDb({ recordExists: false });
+
+      const { res } = await updateAs(staff());
+
+      expect(res.status).toHaveBeenCalledWith(404);
+      expect(res.json).toHaveBeenCalledWith({ message: 'Record not found' });
+      expect(callFor('UPDATE announcements')).toBeUndefined();
+    });
+
+    it('does not let staff move an announcement to another barangay', async () => {
+      await updateAs(staff(), makeBody({ barangay: 'Anao' }));
+      expect(callFor('UPDATE announcements')[1][4]).toBe('Balanti');
+    });
+
+    it('lets a city-wide admin edit any barangay and move it to a known one', async () => {
+      setupDb({ recordBarangay: 'Anao' });
+
+      const { res } = await updateAs(admin, makeBody({ barangay: 'Balanti' }));
+
+      expect(res.status).not.toHaveBeenCalled();
+      expect(callFor('UPDATE announcements')[1][4]).toBe('Balanti');
+    });
+
+    it('rejects an unknown barangay from a city-wide admin', async () => {
+      const { next } = await updateAs(admin, makeBody({ barangay: 'Nowhere' }));
+
+      expect(next.mock.calls[0][0].message).toBe('Barangay is not recognized.');
+      expect(callFor('UPDATE announcements')).toBeUndefined();
+    });
   });
 
   it('returns 404 when the announcement does not exist', async () => {
@@ -2118,6 +2646,50 @@ describe('announcements: poster access', () => {
     setupDb({ poster: posterRow({ audience: 'Barangay Staff' }) });
 
     const { res } = await fetchPoster(staff());
+
+    expect(res.sendFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows staff to open the poster of a city-wide announcement', async () => {
+    setupDb({ poster: posterRow({ barangay: null }) });
+
+    const { res } = await fetchPoster(staff());
+
+    expect(res.status).not.toHaveBeenCalled();
+    expect(res.sendFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows staff to open the poster of an announcement for their own barangay', async () => {
+    setupDb({ poster: posterRow({ barangay: 'Barangay Balanti' }) });
+
+    const { res } = await fetchPoster(staff());
+
+    expect(res.sendFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('blocks staff from the poster of another barangay, even a draft they could otherwise write', async () => {
+    setupDb({ poster: posterRow({ barangay: 'Anao' }) });
+
+    const { res } = await fetchPoster(
+      staff({ permissions: ['announcements:write'] }),
+    );
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.sendFile).not.toHaveBeenCalled();
+  });
+
+  it('blocks a barangay admin from the poster of another barangay', async () => {
+    setupDb({ poster: posterRow({ barangay: 'Balanti' }) });
+
+    const { res } = await fetchPoster({ ...writer, barangay: 'Anao' });
+
+    expect(res.status).toHaveBeenCalledWith(403);
+  });
+
+  it('lets a city-wide admin who can write open any barangay poster', async () => {
+    setupDb({ poster: posterRow({ barangay: 'Anao' }) });
+
+    const { res } = await fetchPoster(writer);
 
     expect(res.sendFile).toHaveBeenCalledTimes(1);
   });

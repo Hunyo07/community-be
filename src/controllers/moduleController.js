@@ -59,8 +59,8 @@ const otherDocumentTitle = (title) => {
   return specification;
 };
 
-const normalizeBarangayName = (barangay = '') =>
-  String(barangay)
+   const normalizeBarangayName = (barangay) =>
+     String(barangay ?? '')
     .trim()
     .replace(/^barangay\s+/i, '')
     .toLowerCase();
