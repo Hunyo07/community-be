@@ -314,6 +314,19 @@ describe('document requests: submitting (FR7)', () => {
     expect(insertCall()[1][0]).toBe(12);
   });
 
+  it('files a resident request under the signed-in resident, never a resident ID from the body', async () => {
+    await submit(makeBody({ residentId: 99 }));
+    expect(insertCall()[1][0]).toBe(12);
+  });
+
+  it.each([null, 0, '', undefined])(
+    'still uses the signed-in resident when the sent resident ID is %j',
+    async (residentId) => {
+      await submit(makeBody({ residentId }));
+      expect(insertCall()[1][0]).toBe(12);
+    },
+  );
+
   it('saves no resident when staff give none', async () => {
     await submit(makeBody(), staff());
     expect(insertCall()[1][0]).toBeNull();

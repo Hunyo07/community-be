@@ -251,7 +251,8 @@ const tableMap = {
     insert: {
       sql: `INSERT INTO service_requests (resident_id, service_id, document_type_id, title, description, status, priority) VALUES (?, ?, ?, ?, ?, ?, ?)`,
       values: (body, user) => [
-        body.residentId || (user?.accountType === 'resident' ? user.id : null),
+        // A resident can only file for themselves. Staff may name the resident.
+        user?.accountType === 'resident' ? user.id : body.residentId || null,
         null,
         body.documentTypeId || null,
         body.title,

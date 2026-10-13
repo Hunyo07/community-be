@@ -98,17 +98,32 @@ describe('submitting a document request (BB-07, BB-08)', () => {
     expect(row.title).toBe('Certificate of Solo Parent');
   });
 
-  // Known problem found during testing: the server trusts the residentId sent by the client.
-  // This test states the CORRECT behavior, so it is marked as an expected failure until the fix.
-  it.fails('SECURITY: a resident cannot file a request under another resident', async () => {
+  it('a resident cannot file a request under another resident (the sent residentId is ignored)', async () => {
     const [other] = await dbRows('SELECT id FROM resident_accounts WHERE email = ?', [
       accounts.residentAguso.email,
+    ]);
+    const [me] = await dbRows('SELECT id FROM resident_accounts WHERE email = ?', [
+      accounts.residentBalanti.email,
     ]);
 
     const res = await submit(residentBalanti, { residentId: other.id });
 
+    expect(res.status).toBe(201);
     const [row] = await dbRows('SELECT resident_id FROM service_requests WHERE id = ?', [res.body.data.id]);
-    expect(row.resident_id).not.toBe(other.id);
+    expect(row.resident_id).toBe(me.id);
+    expect(await dbRows('SELECT id FROM service_requests WHERE resident_id = ?', [other.id])).toHaveLength(0);
+  });
+
+  it('lets staff file a request on behalf of a resident', async () => {
+    const [target] = await dbRows('SELECT id FROM resident_accounts WHERE email = ?', [
+      accounts.residentBalanti.email,
+    ]);
+
+    const res = await submit(staffBalanti, { residentId: target.id });
+
+    expect(res.status).toBe(201);
+    const [row] = await dbRows('SELECT resident_id FROM service_requests WHERE id = ?', [res.body.data.id]);
+    expect(row.resident_id).toBe(target.id);
   });
 });
 
